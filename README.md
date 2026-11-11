@@ -35,6 +35,20 @@ Optional settings: copy `.env.example` values into real environment variables
 (`DATABASE_URL`, `UPLOAD_DIR`, `SESSION_SECRET`, `PORT`). Defaults work with no setup:
 SQLite file `remora.db` and an `uploads/` folder are created automatically.
 
+## Photos in this repo
+
+The story/hero JPEGs that live in `static/img/` at runtime travel through the
+GitHub push pipeline as plain base64 **text** files in `static/img_b64/`
+(`<name>.jpg.b64`), because that pipeline carries UTF-8 text only — the binary
+JPEGs cannot be pushed directly. `decode_photos.py` (stdlib only, idempotent)
+decodes every `.b64` file back into `static/img/<name>.jpg`. Render runs it
+automatically as part of the build command. After a **local clone**, run it
+once before starting the server:
+
+```bash
+python3 decode_photos.py
+```
+
 ## Upload to AWS (App Runner — simplest test run)
 
 **Option A — Docker / App Runner from a container image**
