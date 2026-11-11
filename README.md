@@ -1,6 +1,8 @@
-# Remora — real deployable source code
+# Viavios — real deployable source code
 
-Remora is a web app where anybody can create an account and write their own
+> Public brand: **Viavios** (viavios.com — "the way of life"). "Remora" is the internal codename; the GitHub repo keeps the name `imeshnu1/remora`.
+
+Viavios is a web app where anybody can create an account and write their own
 memoir, legacy book, chronicle, or testament: free writing in chapters, photos,
 voice notes, a life timeline, and letters — with private / family / public /
 testament sharing, reader voting on public stories, an opt-in for publishers,

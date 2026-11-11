@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Restore the Remora story photos from their base64 text copies.
+"""Restore the Viavios story photos from their base64 text copies.
 
 The JPEGs in static/img/ travel through the GitHub push pipeline as plain
 base64 text files in static/img_b64/ (the pipeline carries UTF-8 text only).

@@ -1,5 +1,5 @@
 """
-Remora - memoir / legacy book / chronicle / testament web app.
+Viavios - memoir / legacy book / chronicle / testament web app.
 FastAPI + SQLAlchemy (SQLite by default, PostgreSQL via DATABASE_URL on AWS).
 Vanilla frontend served from ./static. Passwords: PBKDF2 (stdlib). Sessions: server-side tokens in a cookie.
 """
@@ -177,7 +177,7 @@ def can_read_book(db: Session, b: Book, user) -> bool:
         return user.email.lower() in emails
     return False  # private and testament are owner-only until a future verified release process
 
-app = FastAPI(title="Remora")
+app = FastAPI(title="Viavios")
 
 # ---------- Auth ----------
 @app.post("/api/signup")
@@ -435,7 +435,7 @@ def export_pdf(book_id: int, request: Request, db: Session = Depends(get_db)):
     pdf.set_auto_page_break(auto=True, margin=20)
     pdf.add_page()
     txt(pdf, 24, "B", 12, b.title)
-    txt(pdf, 12, "", 7, f"{b.type} - Remora")
+    txt(pdf, 12, "", 7, f"{b.type} - Viavios")
     if b.description:
         pdf.ln(4); txt(pdf, 12, "", 7, b.description)
     chapters = db.query(Chapter).filter_by(book_id=b.id).order_by(Chapter.sort_order, Chapter.id).all()

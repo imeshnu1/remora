@@ -27,7 +27,7 @@ function route(name){
 function showAuth(){
   app.innerHTML = `<figure class="hero"><img class="hero-img" src="/static/img/hero-family.jpg" alt="Three generations of one family laughing together around the kitchen table">
   <figcaption class="hero-caption"><h1>Write the book of your life.</h1></figcaption></figure>
-  <p>Remora is where anybody can make their own memoir, legacy book, chronicle, testament, or photo story — in your own words, your own pictures, or your own voice.</p>
+  <p>Viavios is where anybody can make their own memoir, legacy book, chronicle, testament, or photo story — in your own words, your own pictures, or your own voice.</p>
   <div class="grid">
     <div class="card" id="create-card"><h2>Create account</h2><div id="autherr"></div>
       <label>Your name<input id="su-name"></label><label>Email<input id="su-email" type="email"></label>
@@ -40,7 +40,7 @@ function showAuth(){
   <h2 style="margin-top:30px">Stories people are writing</h2>
   <div id="landing-stories"><p class="muted">Loading stories…</p></div>
   <div class="paths"><h2>You don't have to be a writer</h2>
-  <p>There are three ways to tell your story on Remora. Pick the one that feels easy.</p>
+  <p>There are three ways to tell your story on Viavios. Pick the one that feels easy.</p>
   <div class="grid">
     <div class="card"><h3>Write it</h3><p>Chapter by chapter, in your own words — a little at a time is fine.</p></div>
     <div class="card"><h3>Photograph it</h3><p>Build a Photo Story from your pictures — your family, your childhood, the things you have collected and kept. A few words under each photo is enough.</p></div>
@@ -140,7 +140,7 @@ function realStoryCard(b, snap, img){
   return `<div class="card story-card" onclick="openGlanceReal(${b.id})" title="Take a look inside">
     <img class="story-photo" src="${esc(img || typeImg(b.type, b.id))}" alt="Photograph from ${esc(b.title)}">
     <h3>${esc(b.title)}</h3>
-    <span class="badge">${esc(b.type)}</span><span class="badge">by ${esc(b.author_name || 'a Remora writer')}</span><span class="badge">♥ ${b.votes || 0} votes</span>${b.publisher_optin ? '<span class="badge">Open to publishers</span>' : ''}
+    <span class="badge">${esc(b.type)}</span><span class="badge">by ${esc(b.author_name || 'a Viavios writer')}</span><span class="badge">♥ ${b.votes || 0} votes</span>${b.publisher_optin ? '<span class="badge">Open to publishers</span>' : ''}
     <p class="story-snap">${esc(snap)}</p>
     <p class="glance-link">Take a look inside →</p></div>`;
 }
@@ -167,7 +167,7 @@ async function loadLandingStories(){
       const ch = (detail.chapters || []).find(c => c.body && c.body.trim());
       if (ch) snap = makeSnap(ch.body) || snap;
     }
-    if (!snap) snap = 'A true story, written chapter by chapter on Remora.';
+    if (!snap) snap = 'A true story, written chapter by chapter on Viavios.';
     cards.push(realStoryCard(b, snap, bookPhoto(detail, b.type, b.id)));
   }
   for (let i = 0; cards.length < 3 && i < SAMPLE_STORIES.length; i++) cards.push(sampleStoryCard(SAMPLE_STORIES[i], i));
@@ -219,8 +219,8 @@ window.openGlanceReal = async id => {
   const inside = photos.slice(1, 3);
   if (!inside.length) inside.push(...[typeImg(d.type, d.id), IMG.familyBlackAlbum, IMG.album].filter(u => u !== cover).slice(0, 2));
   const chap = (d.chapters || []).find(c => c.body && c.body.trim());
-  renderGlance({cover, title:d.title, type:d.type, author:d.author_name || 'a Remora writer',
-    about: d.description ? d.description : `${d.author_name || 'The author'} is writing this ${String(d.type).toLowerCase()} on Remora, a little at a time, in their own words and pictures.`,
+  renderGlance({cover, title:d.title, type:d.type, author:d.author_name || 'a Viavios writer',
+    about: d.description ? d.description : `${d.author_name || 'The author'} is writing this ${String(d.type).toLowerCase()} on Viavios, a little at a time, in their own words and pictures.`,
     writtenFor: WRITTEN_FOR[d.type] || WRITTEN_FOR['Memoir'],
     chapters:(d.chapters || []).map(c => c.title),
     excerpt: chap ? firstWords(chap.body, 120) : 'The first chapter is still being written.',
@@ -343,7 +343,7 @@ async function showDiscover(){
 }
 async function showPublishers(){
   const books = await api('/api/publishers');
-  app.innerHTML = `<h1>For Publishers</h1><p class="muted">Public stories whose authors opted in, ranked by reader votes. A sale requires the author's explicit per-book deal — Remora takes a platform commission, the author keeps the majority.</p>
+  app.innerHTML = `<h1>For Publishers</h1><p class="muted">Public stories whose authors opted in, ranked by reader votes. A sale requires the author's explicit per-book deal — Viavios takes a platform commission, the author keeps the majority.</p>
   ${books.map(b=>`<div class="card"><h3>${esc(b.title)}</h3><span class="badge">♥ ${b.votes} votes</span><span class="badge">by ${esc(b.author_name)}</span><p>${esc(b.description)}</p><button class="ghost" onclick="openReader(${b.id})">Read</button></div>`).join('') || '<p class="muted">No opted-in stories yet.</p>'}`;
 }
 async function showPricing(){
