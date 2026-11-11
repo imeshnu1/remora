@@ -3,7 +3,7 @@ Viavios - memoir / legacy book / chronicle / testament web app.
 FastAPI + SQLAlchemy (SQLite by default, PostgreSQL via DATABASE_URL on AWS).
 Vanilla frontend served from ./static. Passwords: PBKDF2 (stdlib). Sessions: server-side tokens in a cookie.
 """
-import hashlib, hmac, os, secrets, shutil
+import base64, hashlib, hmac, os, secrets, shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -451,6 +451,25 @@ def export_pdf(book_id: int, request: Request, db: Session = Depends(get_db)):
     out = bytes(pdf.output())
     return Response(content=out, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="remora-book-{b.id}.pdf"'})
+
+# ---------- Bundled photos (base64 fallback) ----------
+# The photographs travel in the repo as base64 text (static/img_b64/) because
+# the GitHub push pipeline carries text only; decode_photos.py restores the
+# .jpg files at build time on hosts that run it. On hosts that never run the
+# restore step (e.g. Vercel), serve the photos by decoding the .b64 on the fly.
+@app.get("/static/img/{img_name}")
+def static_img(img_name: str):
+    if "/" in img_name or "\\" in img_name or ".." in img_name:
+        raise HTTPException(status_code=404)
+    jpg = BASE_DIR / "static" / "img" / img_name
+    if jpg.exists():
+        return FileResponse(str(jpg), media_type="image/jpeg")
+    b64 = BASE_DIR / "static" / "img_b64" / (img_name + ".b64")
+    if b64.exists():
+        data = base64.b64decode(b64.read_text())
+        return Response(content=data, media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=86400"})
+    raise HTTPException(status_code=404)
 
 # ---------- Static frontend ----------
 app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
