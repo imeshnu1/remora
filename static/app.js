@@ -67,10 +67,60 @@ function showAuth(){
 }
 // Landing-page stories: real public books from /api/discover first; clearly
 // labeled sample stories only fill the row when there are fewer than 3 real ones.
+const IMG = {
+  coupleHome:'/static/img/story-couple-home.jpg',
+  womanHome:'/static/img/story-woman-home.jpg',
+  manReading:'/static/img/story-man-reading.jpg',
+  couplePorch:'/static/img/story-couple-porch.jpg',
+  album:'/static/img/story-grandparents-album.jpg',
+  community:'/static/img/story-community-table.jpg',
+  blackCouple:'/static/img/story-couple-black-home.jpg',
+  familyBlackAlbum:'/static/img/story-family-black-album.jpg',
+  familyLatina:'/static/img/story-family-latina-kitchen.jpg',
+  asianCouple:'/static/img/story-couple-asian.jpg'
+};
+// Default cover per book type. Two fitting photos per type, picked by a hash
+// of the book id, so Discover shows a genuinely mixed set of faces instead of
+// the same photograph on every book.
+const TYPE_IMGS = {
+  'Memoir':[IMG.coupleHome, IMG.blackCouple],
+  'Legacy Book':[IMG.album, IMG.familyBlackAlbum],
+  'Chronicle':[IMG.manReading, IMG.asianCouple],
+  'Testament':[IMG.community, IMG.familyLatina],
+  'Photo Story':[IMG.couplePorch, IMG.familyLatina]
+};
+function typeImg(type, seed){
+  const arr = TYPE_IMGS[type] || [IMG.coupleHome, IMG.blackCouple];
+  const s = String(seed ?? type ?? '');
+  let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return arr[h % arr.length];
+}
+const WRITTEN_FOR = {
+  'Memoir':'Written to be kept — so the people who love them know the whole story, in their own words.',
+  'Legacy Book':'Written for their children and grandchildren, so they know where they come from.',
+  'Chronicle':'Written year by year, for everyone who was there — and for everyone who comes after.',
+  'Testament':'Left for the people named inside it, to be opened when the time comes.',
+  'Photo Story':'Told in pictures, for the family — every face named, every place remembered.'
+};
 const SAMPLE_STORIES = [
-  {title:'Growing Up Above the Bakery', type:'Memoir', author:'Elena R.', snap:'Every morning of my childhood started at 4 a.m. with the smell of bread coming up through the floorboards. My father said a family that feeds a town can never really be poor — this is the story of the winter we almost lost the shop, and the neighbors who would not let us.'},
-  {title:'Letters to My Grandchildren', type:'Legacy Book', author:'Walter J.', snap:'I am 81, and my grandchildren know me as the quiet man at the end of the table. They do not know about the ship, the storm of \u201968, or the woman I wrote letters to for two years before I married her. I am writing it all down before the remembering is left to other people.'},
-  {title:'Fifty Years on Maple Street', type:'Chronicle', author:'Ruth & Daniel M.', snap:'One house, one street, fifty years — every block party, blackout, wedding and goodbye, written year by year as it happened. A chronicle is not the big moments. It is proof that an ordinary street was somebody\u2019s whole world.'}
+  {title:'Growing Up Above the Bakery', type:'Memoir', author:'Elena R.', img:IMG.coupleHome, inside:[IMG.womanHome, IMG.album],
+   about:'Elena R. is 74. She started behind the bakery counter at nine years old, standing on a flour crate to reach the till, and she still makes her father\u2019s cardamom rolls every December.',
+   writtenFor:'Written for her daughter, and for the grandchildren who think the smell of warm bread is just what Grandma\u2019s house smells like.',
+   chapters:['The Flour Crate', 'The Winter We Almost Lost the Shop', 'What My Father Taught the Town'],
+   opening:'Every morning of my childhood started at four o\u2019clock, and it did not start with an alarm. It started with the floor. The boards under my bed would warm up, just a little, and the smell would come through them — yeast and butter and the first trays of bread — and I knew my father was already downstairs, moving in the dark like a man in a church. I was nine the year he put the flour crate behind the counter so I could reach the till. \u201cElena,\u201d he said, \u201ca family that feeds a town can never really be poor. Remember that when it matters.\u201d It mattered sooner than either of us expected. The winter I turned twelve, the mill raised its prices, the oven cracked, and the bank sent a man in a good coat to stand in our doorway and be polite at us.',
+   snap:'Every morning of my childhood started at 4 a.m. with the smell of bread coming up through the floorboards. My father said a family that feeds a town can never really be poor — this is the story of the winter we almost lost the shop, and the neighbors who would not let us.'},
+  {title:'Letters to My Grandchildren', type:'Legacy Book', author:'Walter J.', img:IMG.familyBlackAlbum, inside:[IMG.blackCouple],
+   about:'Walter J. is 81, a retired merchant seaman who crossed the Atlantic more than forty times and now lives in the house in Maine where he was born.',
+   writtenFor:'Written for his grandchildren, so they know where they come from — and for Margaret, who kept every letter he ever sent her.',
+   chapters:['The Ship and the Storm of \u201968', 'Two Years of Letters', 'The Quiet Man at the End of the Table'],
+   opening:'My grandchildren know me as the quiet man at the end of the table, the one who carves the turkey and falls asleep during the football. They do not know that at nineteen I was standing a night watch in the North Atlantic, in a storm that took two men off a ship ahead of ours, holding a rail with both hands and promising God a list of things I have mostly kept. They do not know I wrote to their grandmother every Sunday for two years before she agreed to marry me, or that she kept all ninety-six letters in a biscuit tin. I am writing this book because the remembering should not be left to other people. If you are reading it, I did my part. The rest — the remembering, the retelling — is yours now.',
+   snap:'I am 81, and my grandchildren know me as the quiet man at the end of the table. They do not know about the ship, the storm of \u201968, or the woman I wrote letters to for two years before I married her. I am writing it all down before the remembering is left to other people.'},
+  {title:'Fifty Years on Maple Street', type:'Chronicle', author:'Ruth & Daniel M.', img:IMG.manReading, inside:[IMG.asianCouple, IMG.couplePorch],
+   about:'Ruth and Daniel M. bought the little blue house on Maple Street in 1968 for $14,500. Ruth kept a notebook by the telephone for fifty years. This book is that notebook, finished.',
+   writtenFor:'Written for everyone who ever lived on Maple Street — and for the kids who grew up there and moved away, so the street they remember still exists somewhere.',
+   chapters:['1968: The Year We Moved In', 'The Blackout Summer', 'Every Wedding, Every Goodbye'],
+   opening:'We moved onto Maple Street in the October of 1968, with a borrowed truck, a new baby, and a house payment of ninety-one dollars a month. Mrs. Abernathy from number 12 was on our porch before the truck was unloaded, holding a casserole and the whole history of the street, which she delivered in that order. Daniel says I wrote the first entry in the notebook that night. I don\u2019t remember writing it, but there it is, in my hand: \u201cAbernathys — casserole people. Good people.\u201d Fifty years of entries followed — every block party and blackout, every wedding on the church steps, every ambulance that came in the night and every baby that came home in the morning. A chronicle is not the big moments. It is proof that an ordinary street was somebody\u2019s whole world.',
+   snap:'One house, one street, fifty years — every block party, blackout, wedding and goodbye, written year by year as it happened. A chronicle is not the big moments. It is proof that an ordinary street was somebody\u2019s whole world.'}
 ];
 function makeSnap(text, max=240){
   const t = String(text ?? '').replace(/\s+/g,' ').trim();
@@ -81,18 +131,27 @@ function makeSnap(text, max=240){
   const sp = cut.lastIndexOf(' ');
   return (sp > 80 ? cut.slice(0, sp) : cut) + '…';
 }
-function realStoryCard(b, snap){
-  return `<div class="card story-card"><h3>${esc(b.title)}</h3>
+function bookPhoto(detail, type, seed){
+  const photos = ((detail && detail.media) || []).filter(m => m.kind === 'photo' && m.url);
+  return photos.length ? photos[0].url : typeImg(type, seed ?? (detail && detail.id));
+}
+function realStoryCard(b, snap, img){
+  return `<div class="card story-card" onclick="openGlanceReal(${b.id})" title="Take a look inside">
+    <img class="story-photo" src="${esc(img || typeImg(b.type, b.id))}" alt="Photograph from ${esc(b.title)}">
+    <h3>${esc(b.title)}</h3>
     <span class="badge">${esc(b.type)}</span><span class="badge">by ${esc(b.author_name || 'a Remora writer')}</span><span class="badge">♥ ${b.votes || 0} votes</span>${b.publisher_optin ? '<span class="badge">Open to publishers</span>' : ''}
     <p class="story-snap">${esc(snap)}</p>
-    <p class="muted">Sign in to read the whole story.</p></div>`;
+    <p class="glance-link">Take a look inside →</p></div>`;
 }
-function sampleStoryCard(s){
-  return `<div class="card story-card"><h3>${esc(s.title)}</h3>
+function sampleStoryCard(s, i){
+  return `<div class="card story-card" onclick="openGlanceSample(${i})" title="Take a look inside">
+    <img class="story-photo" src="${esc(s.img)}" alt="Photograph for ${esc(s.title)}">
+    <h3>${esc(s.title)}</h3>
     <span class="badge">${esc(s.type)}</span><span class="badge">by ${esc(s.author)}</span><span class="badge sample">Sample story</span>
     <p class="story-snap">${esc(s.snap)}</p>
-    <p class="muted">A sample of the kind of story people write on Remora.</p></div>`;
+    <p class="glance-link">Take a look inside →</p></div>`;
 }
+const GLANCE_CACHE = {};
 async function loadLandingStories(){
   const box = document.getElementById('landing-stories');
   if (!box) return;
@@ -101,19 +160,71 @@ async function loadLandingStories(){
   const cards = [];
   for (const b of real) {
     let snap = makeSnap(b.description);
-    if (snap.length < 40) {
-      try {
-        const full = await api(`/api/books/${b.id}`);
-        const ch = (full.chapters || []).find(c => c.body && c.body.trim());
-        if (ch) snap = makeSnap(ch.body) || snap;
-      } catch(e){ /* keep the description snap */ }
+    let detail = null;
+    try { detail = await api(`/api/books/${b.id}`); GLANCE_CACHE[b.id] = detail; } catch(e){ /* glance will refetch */ }
+    if (snap.length < 40 && detail) {
+      const ch = (detail.chapters || []).find(c => c.body && c.body.trim());
+      if (ch) snap = makeSnap(ch.body) || snap;
     }
     if (!snap) snap = 'A true story, written chapter by chapter on Remora.';
-    cards.push(realStoryCard(b, snap));
+    cards.push(realStoryCard(b, snap, bookPhoto(detail, b.type, b.id)));
   }
-  for (let i = 0; cards.length < 3 && i < SAMPLE_STORIES.length; i++) cards.push(sampleStoryCard(SAMPLE_STORIES[i]));
+  for (let i = 0; cards.length < 3 && i < SAMPLE_STORIES.length; i++) cards.push(sampleStoryCard(SAMPLE_STORIES[i], i));
   box.innerHTML = `<div class="grid">${cards.join('')}</div>`;
 }
+// ---------- Glance inside the book ----------
+// A peek, never the book: cover photo, who wrote it and who it is for, the
+// chapter list, and the opening of chapter one. Full reading keeps the
+// existing sharing rules.
+function firstWords(text, n){
+  const words = String(text ?? '').replace(/\s+/g,' ').trim().split(' ').filter(Boolean);
+  return words.slice(0, n).join(' ') + (words.length > n ? '…' : '');
+}
+function closeGlance(){ const o = document.getElementById('glance-overlay'); if (o) o.remove(); }
+window.closeGlance = closeGlance;
+function renderGlance(g){
+  closeGlance();
+  const el = document.createElement('div');
+  el.id = 'glance-overlay'; el.className = 'glance-overlay';
+  el.innerHTML = `<div class="glance">
+    <button class="ghost glance-close" onclick="closeGlance()">✕ Close</button>
+    <img class="glance-cover" src="${esc(g.cover)}" alt="Cover photograph for ${esc(g.title)}">
+    <h2>${esc(g.title)}</h2>
+    <p class="glance-meta"><span class="badge">${esc(g.type)}</span><span class="badge">by ${esc(g.author)}</span>${g.votes != null ? `<span class="badge">♥ ${g.votes} votes</span>` : ''}${g.sample ? '<span class="badge sample">Sample story</span>' : ''}</p>
+    <p class="glance-about">${esc(g.about)}</p>
+    <p class="glance-for"><em>${esc(g.writtenFor)}</em></p>
+    <h3>What's inside</h3>
+    <ul class="glance-chapters">${g.chapters.map(t => `<li>${esc(t)}</li>`).join('') || '<li>Chapters are being written…</li>'}</ul>
+    <h3>The opening</h3>
+    <div class="prose glance-excerpt">${esc(g.excerpt)}</div>
+    ${g.inside && g.inside.length ? `<div class="glance-inside">${g.inside.map(u => `<img src="${esc(u)}" alt="A photograph from inside the book">`).join('')}</div>` : ''}
+    <p class="muted glance-note">This is a look inside — a beginning, not the whole book.</p>
+    ${g.bookId ? `<button class="primary" onclick="closeGlance();openReader(${g.bookId})">Read the whole story</button>` : `<button class="primary" onclick="closeGlance();document.getElementById('create-card') && document.getElementById('create-card').scrollIntoView({behavior:'smooth',block:'center'})">Start your own story</button>`}
+  </div>`;
+  el.addEventListener('click', e => { if (e.target === el) closeGlance(); });
+  document.body.appendChild(el);
+}
+window.openGlanceSample = i => {
+  const s = SAMPLE_STORIES[i];
+  renderGlance({cover:s.img, title:s.title, type:s.type, author:s.author, about:s.about,
+    writtenFor:s.writtenFor, chapters:s.chapters, excerpt:firstWords(s.opening, 120),
+    inside:s.inside, sample:true});
+};
+window.openGlanceReal = async id => {
+  let d = GLANCE_CACHE[id];
+  if (!d) { try { d = await api(`/api/books/${id}`); GLANCE_CACHE[id] = d; } catch(e){ alert('That book could not be opened.'); return; } }
+  const photos = (d.media || []).filter(m => m.kind === 'photo' && m.url).map(m => m.url);
+  const cover = photos[0] || typeImg(d.type, d.id);
+  const inside = photos.slice(1, 3);
+  if (!inside.length) inside.push(...[typeImg(d.type, d.id), IMG.familyBlackAlbum, IMG.album].filter(u => u !== cover).slice(0, 2));
+  const chap = (d.chapters || []).find(c => c.body && c.body.trim());
+  renderGlance({cover, title:d.title, type:d.type, author:d.author_name || 'a Remora writer',
+    about: d.description ? d.description : `${d.author_name || 'The author'} is writing this ${String(d.type).toLowerCase()} on Remora, a little at a time, in their own words and pictures.`,
+    writtenFor: WRITTEN_FOR[d.type] || WRITTEN_FOR['Memoir'],
+    chapters:(d.chapters || []).map(c => c.title),
+    excerpt: chap ? firstWords(chap.body, 120) : 'The first chapter is still being written.',
+    inside, votes:d.votes, bookId: (me && me.id) ? id : null});
+};
 const val = id => document.getElementById(id).value;
 function errBox(id,msg){ document.getElementById(id).innerHTML = `<p class="error">${esc(msg)}</p>`; }
 
@@ -220,8 +331,14 @@ window.openReader = async id => {
 
 async function showDiscover(){
   const books = await api('/api/discover');
-  app.innerHTML = `<h1>Discover — public stories</h1><p class="muted">Sorted by votes. Vote for the real stories you want to see published.</p>
-  ${books.map(b=>`<div class="card"><h3>${esc(b.title)}</h3><span class="badge">${esc(b.type)}</span><span class="badge">by ${esc(b.author_name)}</span><span class="badge">♥ ${b.votes}</span>${b.publisher_optin?'<span class="badge">Open to publishers</span>':''}<p>${esc(b.description)}</p><button class="ghost" onclick="openReader(${b.id})">Read</button></div>`).join('') || '<p class="muted">No public books yet.</p>'}`;
+  const cards = [];
+  for (const b of books) {
+    let detail = null;
+    try { detail = await api(`/api/books/${b.id}`); GLANCE_CACHE[b.id] = detail; } catch(e){ /* default photo */ }
+    cards.push(`<div class="card story-card" onclick="openGlanceReal(${b.id})" title="Take a look inside"><img class="story-photo" src="${esc(bookPhoto(detail, b.type, b.id))}" alt="Photograph from ${esc(b.title)}"><h3>${esc(b.title)}</h3><span class="badge">${esc(b.type)}</span><span class="badge">by ${esc(b.author_name)}</span><span class="badge">♥ ${b.votes}</span>${b.publisher_optin?'<span class="badge">Open to publishers</span>':''}<p>${esc(b.description)}</p><p class="glance-link">Take a look inside →</p><button class="ghost" onclick="event.stopPropagation();openReader(${b.id})">Read</button></div>`);
+  }
+  app.innerHTML = `<h1>Discover — public stories</h1><p class="muted">Sorted by votes. Vote for the real stories you want to see published. Tap a story for a look inside the book.</p>
+  ${cards.join('') || '<p class="muted">No public books yet.</p>'}`;
 }
 async function showPublishers(){
   const books = await api('/api/publishers');

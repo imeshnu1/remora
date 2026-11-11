@@ -31,3 +31,19 @@ footer{text-align:center;padding:20px;font-size:15px}
 .paths{margin-top:34px}
 .magazine-line{text-align:center;font-family:Georgia,'Playfair Display','Times New Roman',serif;font-size:20px;color:#6E2434;margin:20px 0 4px}
 a{color:#6E2434}
+.story-photo{width:100%;height:180px;object-fit:cover;border-radius:8px;border:1px solid #D8C9A8;margin-bottom:10px;display:block}
+.story-card{cursor:pointer}
+.story-card:hover{box-shadow:0 4px 14px rgba(74,55,25,.2)}
+.glance-link{color:#6E2434;font-weight:bold;margin:6px 0 2px}
+.glance-overlay{position:fixed;inset:0;background:rgba(43,33,24,.58);display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;padding:26px 12px;z-index:60}
+.glance{background:#FFFDF8;border:1px solid #D8C9A8;border-radius:14px;max-width:640px;width:100%;padding:22px;box-shadow:0 10px 34px rgba(43,33,24,.35)}
+.glance-cover{width:100%;height:250px;object-fit:cover;border-radius:10px;border:1px solid #D8C9A8}
+.glance-close{float:right}
+.glance-meta{margin:8px 0}
+.glance-about{font-size:18px}
+.glance-for{color:#6E2434;font-family:Georgia,'Playfair Display','Times New Roman',serif;font-size:18px}
+.glance-chapters{line-height:1.7}
+.glance-excerpt{background:#FAF6EE;border:1px solid #EFE3C8;border-radius:10px;padding:16px}
+.glance-inside{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+.glance-inside img{width:100%;height:150px;object-fit:cover;border-radius:8px;border:1px solid #D8C9A8}
+.glance-note{margin-top:14px}

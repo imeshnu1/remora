@@ -1,0 +1,66 @@
+<!--
+IMAGE CREDITS — Remora story photographs
+All photographs below are real photographs (not AI-generated, not watermarked
+stock previews), downloaded 2026-11-11 and verified by preflight (HTTP 200,
+image content) and visual inspection. They ship locally with the app so the
+pages work offline.
+
+story-couple-home.jpg
+  Subject: Elderly couple laughing together on their couch at home.
+  Source page: https://www.pexels.com/photo/an-elderly-couple-on-a-couch-6975859/
+  Media: images.pexels.com/photos/6975859 (Pexels)
+
+story-woman-home.jpg
+  Subject: Senior woman smiling, portrait at home.
+  Source page: https://www.pexels.com/ (photo 6248445, found via image search;
+  embedded at http://mydecor.diy/home-decor-styles-guide)
+  Media: images.pexels.com/photos/6248445 (Pexels)
+
+story-man-reading.jpg
+  Subject: Senior man in a vest and glasses reading a book in a yellow armchair.
+  Source page: https://www.pexels.com/ (photo 8327938)
+  Media: images.pexels.com/photos/8327938 (Pexels)
+
+story-couple-porch.jpg
+  Subject: Elderly couple in white rocking chairs on a sunny porch.
+  Source page: https://kingstonresidenceofhickory.com
+  Media: assets.staticfiles.io (Kingston Residence of Hickory)
+
+story-grandparents-album.jpg
+  Subject: Grandparents and their granddaughter looking through a photo album.
+  Source page: https://www.pexels.com/photo/a-little-girl-and-her-grandparents-looking-at-photos-8307715/
+  Media: images.pexels.com/photos/8307715 (Pexels)
+
+story-community-table.jpg
+  Subject: A group of senior friends laughing over a shared table.
+  Source page: https://totalsenior.com/socialization-for-older-adults-why-its-important/
+  Media: totalsenior.com (Group of seniors enjoying lunch together)
+
+Added 2026-11-11 (second round — representation fix; same preflight +
+visual-inspection bar as above):
+
+story-couple-black-home.jpg
+  Subject: Elegant Black elderly couple holding hands on a white couch in
+  a bright living room.
+  Source page: https://thetempletonofcary.com
+  Media: thetempletonofcary.com/wp-content/uploads/templeton-65-2048x1363.jpg
+
+story-family-black-album.jpg
+  Subject: Black grandparents laughing with their grandson and granddaughter
+  over a photo album on the couch.
+  Source page: https://int.livhospital.com/why-are-autoimmune-diseases-often-genetic-understanding-hereditary-risks-and-family-patterns/
+  Media: livhospital.b-cdn.net (Family history — grandparents and
+  grandchildren with a photo album)
+
+story-family-latina-kitchen.jpg
+  Subject: Latina grandmother laughing while cooking with her granddaughter
+  in their kitchen.
+  Source page: https://www.specialtouch.com/ (Hispanic grandma and
+  granddaughter cooking)
+  Media: specialtouch.com/wp-content/uploads/Hispanic-Grandma-and-Granddaughter-Cooking-1-2048x1366.jpg
+
+story-couple-asian.jpg
+  Subject: Elderly East Asian couple, close portrait, smiling.
+  Source page: https://www.rutgers.edu/magazine/winter-2022/asian-americans-and-health
+  Media: rutgers.edu (Portrait — senior Asian couple)
+-->
