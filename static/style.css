@@ -18,3 +18,6 @@ button.danger{border-color:#a33;color:#a33}
 img.media{max-width:100%;border-radius:10px;margin:8px 0}
 h1,h2,h3{line-height:1.2}footer{text-align:center;padding:20px;font-size:14px}
 .price{font-size:30px;font-weight:bold}
+.story-snap{line-height:1.55}
+.badge.sample{background:#f6ddc9;color:#7a4a21;font-weight:bold}
+.landing-cta{text-align:center;margin:26px 0 6px}

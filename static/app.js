@@ -28,14 +28,18 @@ function showAuth(){
   app.innerHTML = `<h1>Write the book of your life.</h1>
   <p>Remora is where anybody can write their own memoir, legacy book, chronicle, or testament — free writing, chapter by chapter, in your own words.</p>
   <div class="grid">
-    <div class="card"><h2>Create account</h2><div id="autherr"></div>
+    <div class="card" id="create-card"><h2>Create account</h2><div id="autherr"></div>
       <label>Your name<input id="su-name"></label><label>Email<input id="su-email" type="email"></label>
       <label>Password (6+ characters)<input id="su-pass" type="password"></label>
       <button class="primary" id="su-btn">Create my account</button></div>
     <div class="card"><h2>Sign in</h2>
       <label>Email<input id="si-email" type="email"></label><label>Password<input id="si-pass" type="password"></label>
       <button class="primary" id="si-btn">Sign in</button></div>
-  </div>`;
+  </div>
+  <h2 style="margin-top:30px">Stories people are writing</h2>
+  <div id="landing-stories"><p class="muted">Loading stories…</p></div>
+  <div class="landing-cta"><p><strong>Your life is a story too — start writing yours.</strong></p>
+  <button class="primary" id="cta-write">Start writing — create your free account</button></div>`;
   document.getElementById('su-btn').onclick = async ()=>{
     try { me = await api('/api/signup',{method:'POST',body:JSON.stringify({name:val('su-name'),email:val('su-email'),password:val('su-pass')})}); renderUserbox(); showMyBooks(); }
     catch(e){ errBox('autherr', e.message); }
@@ -44,6 +48,60 @@ function showAuth(){
     try { me = await api('/api/signin',{method:'POST',body:JSON.stringify({email:val('si-email'),password:val('si-pass')})}); renderUserbox(); showMyBooks(); }
     catch(e){ errBox('autherr', e.message); }
   };
+  document.getElementById('cta-write').onclick = ()=>{
+    document.getElementById('create-card').scrollIntoView({behavior:'smooth',block:'center'});
+    document.getElementById('su-name').focus({preventScroll:true});
+  };
+  loadLandingStories();
+}
+// Landing-page stories: real public books from /api/discover first; clearly
+// labeled sample stories only fill the row when there are fewer than 3 real ones.
+const SAMPLE_STORIES = [
+  {title:'Growing Up Above the Bakery', type:'Memoir', author:'Elena R.', snap:'Every morning of my childhood started at 4 a.m. with the smell of bread coming up through the floorboards. My father said a family that feeds a town can never really be poor — this is the story of the winter we almost lost the shop, and the neighbors who would not let us.'},
+  {title:'Letters to My Grandchildren', type:'Legacy Book', author:'Walter J.', snap:'I am 81, and my grandchildren know me as the quiet man at the end of the table. They do not know about the ship, the storm of \u201968, or the woman I wrote letters to for two years before I married her. I am writing it all down before the remembering is left to other people.'},
+  {title:'Fifty Years on Maple Street', type:'Chronicle', author:'Ruth & Daniel M.', snap:'One house, one street, fifty years — every block party, blackout, wedding and goodbye, written year by year as it happened. A chronicle is not the big moments. It is proof that an ordinary street was somebody\u2019s whole world.'}
+];
+function makeSnap(text, max=240){
+  const t = String(text ?? '').replace(/\s+/g,' ').trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+  if (end > 80) return cut.slice(0, end+1);
+  const sp = cut.lastIndexOf(' ');
+  return (sp > 80 ? cut.slice(0, sp) : cut) + '…';
+}
+function realStoryCard(b, snap){
+  return `<div class="card story-card"><h3>${esc(b.title)}</h3>
+    <span class="badge">${esc(b.type)}</span><span class="badge">by ${esc(b.author_name || 'a Remora writer')}</span><span class="badge">♥ ${b.votes || 0} votes</span>${b.publisher_optin ? '<span class="badge">Open to publishers</span>' : ''}
+    <p class="story-snap">${esc(snap)}</p>
+    <p class="muted">Sign in to read the whole story.</p></div>`;
+}
+function sampleStoryCard(s){
+  return `<div class="card story-card"><h3>${esc(s.title)}</h3>
+    <span class="badge">${esc(s.type)}</span><span class="badge">by ${esc(s.author)}</span><span class="badge sample">Sample story</span>
+    <p class="story-snap">${esc(s.snap)}</p>
+    <p class="muted">A sample of the kind of story people write on Remora.</p></div>`;
+}
+async function loadLandingStories(){
+  const box = document.getElementById('landing-stories');
+  if (!box) return;
+  let real = [];
+  try { real = (await api('/api/discover') || []).slice(0, 6); } catch(e){ real = []; }
+  const cards = [];
+  for (const b of real) {
+    let snap = makeSnap(b.description);
+    if (snap.length < 40) {
+      try {
+        const full = await api(`/api/books/${b.id}`);
+        const ch = (full.chapters || []).find(c => c.body && c.body.trim());
+        if (ch) snap = makeSnap(ch.body) || snap;
+      } catch(e){ /* keep the description snap */ }
+    }
+    if (!snap) snap = 'A true story, written chapter by chapter on Remora.';
+    cards.push(realStoryCard(b, snap));
+  }
+  for (let i = 0; cards.length < 3 && i < SAMPLE_STORIES.length; i++) cards.push(sampleStoryCard(SAMPLE_STORIES[i]));
+  box.innerHTML = `<div class="grid">${cards.join('')}</div>`;
 }
 const val = id => document.getElementById(id).value;
 function errBox(id,msg){ document.getElementById(id).innerHTML = `<p class="error">${esc(msg)}</p>`; }
