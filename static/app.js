@@ -26,7 +26,7 @@ function route(name){
 }
 function showAuth(){
   app.innerHTML = `<h1>Write the book of your life.</h1>
-  <p>Remora is where anybody can write their own memoir, legacy book, chronicle, or testament — free writing, chapter by chapter, in your own words.</p>
+  <p>Remora is where anybody can make their own memoir, legacy book, chronicle, testament, or photo story — in your own words, your own pictures, or your own voice.</p>
   <div class="grid">
     <div class="card" id="create-card"><h2>Create account</h2><div id="autherr"></div>
       <label>Your name<input id="su-name"></label><label>Email<input id="su-email" type="email"></label>
@@ -38,6 +38,15 @@ function showAuth(){
   </div>
   <h2 style="margin-top:30px">Stories people are writing</h2>
   <div id="landing-stories"><p class="muted">Loading stories…</p></div>
+  <div class="paths"><h2>You don't have to be a writer</h2>
+  <p>There are three ways to tell your story on Remora. Pick the one that feels easy.</p>
+  <div class="grid">
+    <div class="card"><h3>Write it</h3><p>Chapter by chapter, in your own words — a little at a time is fine.</p></div>
+    <div class="card"><h3>Photograph it</h3><p>Build a Photo Story from your pictures — your family, your childhood, the things you have collected and kept. A few words under each photo is enough.</p></div>
+    <div class="card"><h3>Say it</h3><p>Record your voice telling it, in the language you speak at home. Your voice becomes your book.</p></div>
+  </div>
+  <p class="magazine-line">However you tell it, your story becomes your own magazine of your life — a real book your family keeps.</p>
+  <div class="landing-cta"><button class="primary" id="cta-paths">Begin your story — create your free account</button></div></div>
   <div class="landing-cta"><p><strong>Your life is a story too — start writing yours.</strong></p>
   <button class="primary" id="cta-write">Start writing — create your free account</button></div>`;
   document.getElementById('su-btn').onclick = async ()=>{
@@ -48,10 +57,12 @@ function showAuth(){
     try { me = await api('/api/signin',{method:'POST',body:JSON.stringify({email:val('si-email'),password:val('si-pass')})}); renderUserbox(); showMyBooks(); }
     catch(e){ errBox('autherr', e.message); }
   };
-  document.getElementById('cta-write').onclick = ()=>{
+  const goCreate = ()=>{
     document.getElementById('create-card').scrollIntoView({behavior:'smooth',block:'center'});
     document.getElementById('su-name').focus({preventScroll:true});
   };
+  document.getElementById('cta-write').onclick = goCreate;
+  document.getElementById('cta-paths').onclick = goCreate;
   loadLandingStories();
 }
 // Landing-page stories: real public books from /api/discover first; clearly
@@ -111,7 +122,7 @@ async function showMyBooks(){
   app.innerHTML = `<h1>My Books</h1><div id="bookerr"></div>
     <div class="card"><h2>Start a new book</h2>
       <label>Title<input id="nb-title"></label>
-      <label>Type<select id="nb-type"><option>Memoir</option><option>Legacy Book</option><option>Chronicle</option><option>Testament</option></select></label>
+      <label>Type<select id="nb-type"><option>Memoir</option><option>Legacy Book</option><option>Chronicle</option><option>Testament</option><option>Photo Story</option></select></label>
       <label>About this book<textarea id="nb-desc" style="min-height:70px"></textarea></label>
       <button class="primary" id="nb-btn">Create book</button>
       <p class="muted">Free plan: 1 book. Paid plans: unlimited books, PDF export, testament setup.</p></div>

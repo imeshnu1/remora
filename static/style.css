@@ -1,23 +1,33 @@
-*{box-sizing:border-box}body{font-family:Georgia,serif;margin:0;background:#faf7f1;color:#222}
-header{display:flex;justify-content:space-between;align-items:center;padding:14px 22px;background:#1e2a26;color:#f5efe3;flex-wrap:wrap;gap:10px}
-.brand{font-size:28px;font-weight:bold;letter-spacing:1px}
-nav button{background:transparent;border:1px solid #f5efe3;color:#f5efe3;border-radius:20px;padding:7px 14px;margin:2px;cursor:pointer;font-family:inherit}
-nav button:hover{background:#f5efe3;color:#1e2a26}
+/* Remora palette — upper-class editorial magazine, warm boomer-memory colors.
+   Ivory #FAF6EE · espresso ink #2B2118 · brass #A87F2D · burgundy #6E2434 · hunter #2F4A3C */
+*{box-sizing:border-box}
+body{font-family:'Segoe UI','Helvetica Neue',Helvetica,Arial,sans-serif;font-size:18px;line-height:1.6;margin:0;background:#FAF6EE;color:#2B2118}
+h1,h2,h3,.brand,.price{font-family:Georgia,'Playfair Display','Times New Roman',serif}
+header{display:flex;justify-content:space-between;align-items:center;padding:16px 22px;background:#2F4A3C;color:#FAF3E3;flex-wrap:wrap;gap:10px;border-bottom:4px solid #A87F2D}
+.brand{font-size:30px;font-weight:bold;letter-spacing:1px;color:#E7C877}
+nav button{background:transparent;border:1px solid #FAF3E3;color:#FAF3E3;border-radius:20px;padding:9px 16px;margin:2px;cursor:pointer;font-family:inherit;font-size:16px}
+nav button:hover{background:#FAF3E3;color:#2F4A3C}
 main{max-width:900px;margin:0 auto;padding:24px 18px 40px}
-.card{background:#fff;border:1px solid #e2d9c8;border-radius:12px;padding:18px;margin:14px 0;box-shadow:0 1px 4px rgba(0,0,0,.05)}
-input,textarea,select{width:100%;padding:10px;margin:6px 0 12px;border:1px solid #c9bfa9;border-radius:8px;font-family:inherit;font-size:16px}
+.card{background:#FFFDF8;border:1px solid #D8C9A8;border-radius:12px;padding:20px;margin:14px 0;box-shadow:0 2px 6px rgba(74,55,25,.12)}
+input,textarea,select{width:100%;padding:12px;margin:6px 0 12px;border:1px solid #B9A67F;border-radius:8px;background:#FFFDF8;color:#2B2118;font-family:inherit;font-size:17px}
+input:focus,textarea:focus,select:focus{outline:2px solid #A87F2D;outline-offset:1px}
 textarea{min-height:120px}
-button.primary{background:#1e2a26;color:#fff;border:none;border-radius:8px;padding:11px 20px;cursor:pointer;font-size:16px;font-family:inherit}
-button.ghost{background:transparent;border:1px solid #1e2a26;border-radius:8px;padding:8px 14px;cursor:pointer;font-family:inherit;margin:3px}
-button.danger{border-color:#a33;color:#a33}
-.muted{color:#777}.error{color:#a33;background:#fdeeee;padding:10px;border-radius:8px}
-.success{color:#175c2c;background:#eaf7ee;padding:10px;border-radius:8px}
-.badge{display:inline-block;background:#efe6d0;border-radius:12px;padding:2px 10px;font-size:13px;margin-right:6px}
+button.primary{background:#6E2434;color:#FFF8EC;border:none;border-radius:8px;padding:13px 22px;cursor:pointer;font-size:17px;font-family:inherit}
+button.primary:hover{background:#591C29}
+button.ghost{background:transparent;border:1px solid #6E2434;color:#6E2434;border-radius:8px;padding:10px 16px;cursor:pointer;font-family:inherit;font-size:16px;margin:3px}
+button.danger{border-color:#93343F;color:#93343F}
+.muted{color:#5C4F3A}.error{color:#7E1F2C;background:#F9E8E4;padding:10px;border-radius:8px}
+.success{color:#1E4D2E;background:#E7F0E4;padding:10px;border-radius:8px}
+.badge{display:inline-block;background:#EFE3C8;color:#4A3A1E;border-radius:12px;padding:3px 11px;font-size:14px;margin-right:6px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
 .prose{white-space:pre-wrap;line-height:1.65;font-size:18px}
-img.media{max-width:100%;border-radius:10px;margin:8px 0}
-h1,h2,h3{line-height:1.2}footer{text-align:center;padding:20px;font-size:14px}
-.price{font-size:30px;font-weight:bold}
-.story-snap{line-height:1.55}
-.badge.sample{background:#f6ddc9;color:#7a4a21;font-weight:bold}
+img.media{max-width:100%;border-radius:10px;margin:8px 0;border:1px solid #D8C9A8}
+h1,h2,h3{line-height:1.25;color:#3A2A18}
+footer{text-align:center;padding:20px;font-size:15px}
+.price{font-size:30px;font-weight:bold;color:#6E2434}
+.story-snap{line-height:1.6}
+.badge.sample{background:#F0D9BE;color:#6E4218;font-weight:bold}
 .landing-cta{text-align:center;margin:26px 0 6px}
+.paths{margin-top:34px}
+.magazine-line{text-align:center;font-family:Georgia,'Playfair Display','Times New Roman',serif;font-size:20px;color:#6E2434;margin:20px 0 4px}
+a{color:#6E2434}

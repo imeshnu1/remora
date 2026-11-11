@@ -50,7 +50,7 @@ class Book(Base):
     id = Column(Integer, primary_key=True)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     title = Column(String(255), nullable=False)
-    type = Column(String(40), default="Memoir")  # Memoir | Legacy Book | Chronicle | Testament
+    type = Column(String(40), default="Memoir")  # Memoir | Legacy Book | Chronicle | Testament | Photo Story (free text, no validation list)
     description = Column(Text, default="")
     visibility = Column(String(20), default="private")  # private | family | public | testament
     family_emails = Column(Text, default="")  # comma-separated
