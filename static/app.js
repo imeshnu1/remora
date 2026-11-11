@@ -25,7 +25,8 @@ function route(name){
   return me && me.id ? showMyBooks() : showAuth();
 }
 function showAuth(){
-  app.innerHTML = `<h1>Write the book of your life.</h1>
+  app.innerHTML = `<figure class="hero"><img class="hero-img" src="/static/img/hero-family.jpg" alt="Three generations of one family laughing together around the kitchen table">
+  <figcaption class="hero-caption"><h1>Write the book of your life.</h1></figcaption></figure>
   <p>Remora is where anybody can make their own memoir, legacy book, chronicle, testament, or photo story — in your own words, your own pictures, or your own voice.</p>
   <div class="grid">
     <div class="card" id="create-card"><h2>Create account</h2><div id="autherr"></div>

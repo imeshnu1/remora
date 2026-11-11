@@ -63,4 +63,14 @@ story-couple-asian.jpg
   Subject: Elderly East Asian couple, close portrait, smiling.
   Source page: https://www.rutgers.edu/magazine/winter-2022/asian-americans-and-health
   Media: rutgers.edu (Portrait — senior Asian couple)
+
+Added 2026-11-11 (landing hero — same preflight + visual-inspection bar;
+two runner-up candidates kept in ~/workspace/remora/hero-candidates/):
+
+hero-family.jpg
+  Subject: A multiethnic three-generation family — grandparents, a younger
+  couple and two children — laughing together around a kitchen table.
+  Source page: https://www.bfppwmg.com/
+  Media: bfppwmg.com/mediahandler/media/760439/BFP_happy-multiethnic-
+  multigeneration-family-with-husb-2025-03-16-02-28-21-utc.jpg
 -->
