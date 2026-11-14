@@ -753,11 +753,15 @@ async def grammar_check(request: Request, user: User = Depends(require_user)):
     form = _p.urlencode({"text": text, "language": "en-US"}).encode()
     try:
         req = _u.Request("https://api.languagetool.org/v2/check", data=form,
-                         headers={"Content-Type": "application/x-www-form-urlencoded"})
+                         headers={"Content-Type": "application/x-www-form-urlencoded",
+                                  "User-Agent": "Viavios/1.0 (memoir writing app)",
+                                  "Accept": "application/json"})
         with _u.urlopen(req, timeout=25) as r:
             out = json.loads(r.read().decode())
-    except Exception:
-        raise HTTPException(502, "The grammar checker is unreachable right now — your writing is saved; try again in a moment.")
+    except Exception as e:
+        code = getattr(e, "code", None)
+        hint = f" (the checker answered {code})" if code else ""
+        raise HTTPException(502, "The grammar checker is unreachable right now — your writing is saved; try again in a moment." + hint)
     return {"matches": [{"message": mt.get("message", ""), "offset": mt.get("offset", 0),
                          "length": mt.get("length", 0),
                          "replacements": [x.get("value", "") for x in mt.get("replacements", [])][:5]}
