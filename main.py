@@ -93,6 +93,7 @@ class Book(Base):
     testament_recipients = Column(Text, default="")
     release_note = Column(Text, default="")
     publisher_optin = Column(Boolean, default=False)
+    font = Column(String(20), default="serif")  # serif | sans | hand | large
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -103,16 +104,19 @@ class Chapter(Base):
     title = Column(String(255), nullable=False)
     body = Column(Text, default="")
     visibility = Column(String(20), default="inherit")  # inherit | private | family | public | testament
+    status = Column(String(20), default="published")  # draft | published
     sort_order = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class Media(Base):
     __tablename__ = "media"
     id = Column(Integer, primary_key=True)
     book_id = Column(Integer, ForeignKey("books.id"), nullable=False, index=True)
     chapter_id = Column(Integer, ForeignKey("chapters.id"), nullable=True)
-    kind = Column(String(20), default="photo")  # photo | audio | voice_transcript
-    filename = Column(String(255), default="")  # stored file name (photo/audio); empty for transcript
+    kind = Column(String(20), default="photo")  # photo | audio | video | voiceover | youtube | voice_transcript
+    filename = Column(String(255), default="")  # stored file name (photo/audio/video); empty for transcript/links
+    url = Column(String(500), nullable=True)  # external link for youtube entries
     original_name = Column(String(255), default="")
     transcript = Column(Text, default="")  # for voice_transcript entries
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -142,6 +146,33 @@ class Vote(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 Base.metadata.create_all(bind=engine)
+
+
+def _ensure_columns():
+    """Tiny additive migration: create_all never adds columns to existing
+    tables, so add this project's later columns when missing (SQLite + PG)."""
+    wanted = {
+        "chapters": [("status", "VARCHAR(20) DEFAULT 'published'"),
+                     ("updated_at", "TIMESTAMP")],
+        "books": [("font", "VARCHAR(20) DEFAULT 'serif'")],
+        "media": [("url", "VARCHAR(500)")],
+        "users": [("auth_provider", "VARCHAR(20) DEFAULT 'password'"),
+                  ("provider_sub", "VARCHAR(255)")],
+    }
+    from sqlalchemy import inspect as sa_inspect, text as sa_text
+    insp = sa_inspect(engine)
+    tables = set(insp.get_table_names())
+    with engine.begin() as conn:
+        for table, cols in wanted.items():
+            if table not in tables:
+                continue
+            existing = {c["name"] for c in insp.get_columns(table)}
+            for name, ddl in cols:
+                if name not in existing:
+                    conn.execute(sa_text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+
+
+_ensure_columns()
 
 # ---------- Helpers ----------
 def get_db():
@@ -209,6 +240,7 @@ def book_json(db: Session, b: Book, include_owner=False):
             "description": b.description or "", "visibility": b.visibility,
             "family_emails": b.family_emails or "", "testament_recipients": b.testament_recipients or "",
             "release_note": b.release_note or "", "publisher_optin": bool(b.publisher_optin),
+            "font": getattr(b, "font", None) or "serif",
             "votes": vote_count(db, b.id),
             "created_at": b.created_at.isoformat() if b.created_at else None}
     if include_owner:
@@ -559,7 +591,7 @@ async def update_book(book_id: int, request: Request, db: Session = Depends(get_
     new_visibility = data.get("visibility", b.visibility)
     if new_visibility == "testament" and user.plan not in PAID_PLANS:
         raise HTTPException(402, {"error": "Testament setup is a paid-plan feature. Upgrade to use it.", "upgrade_required": True})
-    for field in ("title", "type", "description", "visibility", "family_emails", "testament_recipients", "release_note"):
+    for field in ("title", "type", "description", "visibility", "family_emails", "testament_recipients", "release_note", "font"):
         if field in data:
             setattr(b, field, data[field])
     if "publisher_optin" in data:
@@ -582,16 +614,18 @@ def read_book(book_id: int, request: Request, db: Session = Depends(get_db)):
     if not b or not can_read_book(db, b, user):
         raise HTTPException(404, "Book not found or not shared with you")
     chapters = db.query(Chapter).filter_by(book_id=b.id).order_by(Chapter.sort_order, Chapter.id).all()
-    # Non-owners only see chapters that are inherit/public (owner sees all)
+    # Non-owners only see published chapters that are inherit/public (owner sees all, incl. drafts)
     if not (user and user.id == b.owner_id):
-        chapters = [c for c in chapters if c.visibility in ("inherit", "public")]
+        chapters = [c for c in chapters if c.visibility in ("inherit", "public")
+                    and (getattr(c, "status", None) or "published") == "published"]
     media = db.query(Media).filter_by(book_id=b.id).all()
     timeline = db.query(TimelineEntry).filter_by(book_id=b.id).order_by(TimelineEntry.id).all()
     letters = db.query(Letter).filter_by(book_id=b.id).all() if (user and user.id == b.owner_id) else []
     data = book_json(db, b, include_owner=True)
-    data["chapters"] = [{"id": c.id, "title": c.title, "body": c.body, "visibility": c.visibility} for c in chapters]
+    data["chapters"] = [{"id": c.id, "title": c.title, "body": c.body, "visibility": c.visibility,
+                         "status": getattr(c, "status", None) or "published"} for c in chapters]
     data["media"] = [{"id": m.id, "chapter_id": m.chapter_id, "kind": m.kind,
-                      "url": f"/uploads/{m.filename}" if m.filename else None,
+                      "url": getattr(m, "url", None) or (f"/uploads/{m.filename}" if m.filename else None),
                       "original_name": m.original_name, "transcript": m.transcript or ""} for m in media]
     data["timeline"] = [{"id": t.id, "date_text": t.date_text, "event_text": t.event_text} for t in timeline]
     data["letters"] = [{"id": l.id, "recipient_name": l.recipient_name, "body": l.body} for l in letters]
@@ -605,9 +639,10 @@ async def create_chapter(book_id: int, request: Request, db: Session = Depends(g
     data = await request.json()
     c = Chapter(book_id=b.id, title=(data.get("title") or "Untitled chapter").strip(),
                 body=data.get("body") or "", visibility=data.get("visibility") or "inherit",
+                status=data.get("status") if data.get("status") in ("draft", "published") else "published",
                 sort_order=db.query(Chapter).filter_by(book_id=b.id).count())
     db.add(c); db.commit(); db.refresh(c)
-    return {"id": c.id, "title": c.title, "body": c.body, "visibility": c.visibility}
+    return {"id": c.id, "title": c.title, "body": c.body, "visibility": c.visibility, "status": c.status}
 
 @app.put("/api/chapters/{chapter_id}")
 async def update_chapter(chapter_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(require_user)):
@@ -619,8 +654,11 @@ async def update_chapter(chapter_id: int, request: Request, db: Session = Depend
     for field in ("title", "body", "visibility"):
         if field in data:
             setattr(c, field, data[field])
+    if data.get("status") in ("draft", "published"):
+        c.status = data["status"]
     db.commit()
-    return {"id": c.id, "title": c.title, "body": c.body, "visibility": c.visibility}
+    return {"id": c.id, "title": c.title, "body": c.body, "visibility": c.visibility,
+            "status": getattr(c, "status", None) or "published"}
 
 @app.delete("/api/chapters/{chapter_id}")
 def delete_chapter(chapter_id: int, db: Session = Depends(get_db), user: User = Depends(require_user)):
@@ -635,12 +673,17 @@ def delete_chapter(chapter_id: int, db: Session = Depends(get_db), user: User = 
 # ---------- Media / timeline / letters ----------
 @app.post("/api/books/{book_id}/media")
 async def upload_media(book_id: int, kind: str = Form("photo"), chapter_id: str = Form(""),
-                       transcript: str = Form(""), file: UploadFile = File(None),
+                       transcript: str = Form(""), url: str = Form(""), file: UploadFile = File(None),
                        db: Session = Depends(get_db), user: User = Depends(require_user)):
     b = get_own_book(db, book_id, user)
     cid = int(chapter_id) if chapter_id.strip().isdigit() else None
     if kind == "voice_transcript":
         m = Media(book_id=b.id, chapter_id=cid, kind=kind, transcript=transcript)
+    elif kind == "youtube":
+        link = (url or transcript or "").strip()
+        if not link.startswith("http"):
+            raise HTTPException(400, "A YouTube link is required")
+        m = Media(book_id=b.id, chapter_id=cid, kind="youtube", url=link, original_name="YouTube video")
     else:
         if file is None:
             raise HTTPException(400, "A file is required for photo/audio uploads")
@@ -650,7 +693,7 @@ async def upload_media(book_id: int, kind: str = Form("photo"), chapter_id: str 
             shutil.copyfileobj(file.file, out)
         m = Media(book_id=b.id, chapter_id=cid, kind=kind, filename=safe, original_name=file.filename or safe)
     db.add(m); db.commit(); db.refresh(m)
-    return {"id": m.id, "kind": m.kind, "url": f"/uploads/{m.filename}" if m.filename else None, "transcript": m.transcript or ""}
+    return {"id": m.id, "kind": m.kind, "url": getattr(m, "url", None) or (f"/uploads/{m.filename}" if m.filename else None), "transcript": m.transcript or ""}
 
 @app.post("/api/books/{book_id}/timeline")
 async def add_timeline(book_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(require_user)):
@@ -671,6 +714,83 @@ async def add_letter(book_id: int, request: Request, db: Session = Depends(get_d
         raise HTTPException(400, "Recipient name is required")
     db.add(l); db.commit(); db.refresh(l)
     return {"id": l.id, "recipient_name": l.recipient_name, "body": l.body}
+
+# ---------- Writing tools: Google Docs import, grammar, AI suggestions ----------
+@app.post("/api/books/{book_id}/import/google-doc")
+async def import_google_doc(book_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(require_user)):
+    """Import a Google Doc shared as 'anyone with the link can view' as a new
+    draft chapter. Private docs arrive with the full Google sign-in setup."""
+    import re as _re, urllib.request as _u
+    b = get_own_book(db, book_id, user)
+    data = await request.json()
+    m = _re.search(r"docs\.google\.com/document/d/([\w-]{10,})", data.get("url") or "")
+    if not m:
+        raise HTTPException(400, "That doesn't look like a Google Docs link. Copy the link from your document (Share → Copy link).")
+    export_url = f"https://docs.google.com/document/d/{m.group(1)}/export?format=txt"
+    try:
+        req = _u.Request(export_url, headers={"User-Agent": "Mozilla/5.0"})
+        with _u.urlopen(req, timeout=20) as r:
+            text = r.read().decode("utf-8", "replace")
+    except Exception:
+        raise HTTPException(400, "Google wouldn't share that document. In the Doc, choose Share → 'Anyone with the link' → Viewer, then try again.")
+    lines = [ln for ln in text.splitlines()]
+    title = next((ln.strip() for ln in lines if ln.strip()), "Imported from Google Docs")
+    c = Chapter(book_id=b.id, title=title[:255], body=text.strip(), status="draft",
+                sort_order=db.query(Chapter).filter_by(book_id=b.id).count())
+    db.add(c); db.commit(); db.refresh(c)
+    return {"id": c.id, "title": c.title, "status": c.status, "chars": len(text)}
+
+
+@app.post("/api/grammar/check")
+async def grammar_check(request: Request, user: User = Depends(require_user)):
+    """Grammarly-style check via the public LanguageTool API. Runs only when
+    the writer clicks Check grammar — their text is sent for that check only."""
+    import urllib.request as _u, urllib.parse as _p
+    data = await request.json()
+    text = (data.get("text") or "")[:20000]
+    if len(text.strip()) < 3:
+        return {"matches": []}
+    form = _p.urlencode({"text": text, "language": "en-US"}).encode()
+    try:
+        req = _u.Request("https://api.languagetool.org/v2/check", data=form,
+                         headers={"Content-Type": "application/x-www-form-urlencoded"})
+        with _u.urlopen(req, timeout=25) as r:
+            out = json.loads(r.read().decode())
+    except Exception:
+        raise HTTPException(502, "The grammar checker is unreachable right now — your writing is saved; try again in a moment.")
+    return {"matches": [{"message": mt.get("message", ""), "offset": mt.get("offset", 0),
+                         "length": mt.get("length", 0),
+                         "replacements": [x.get("value", "") for x in mt.get("replacements", [])][:5]}
+                        for mt in out.get("matches", [])][:60]}
+
+
+@app.post("/api/ai/suggest")
+async def ai_suggest(request: Request, user: User = Depends(require_user)):
+    """AI writing suggestions. Privacy rule: a passage is sent to the AI only
+    when the writer clicks for a suggestion, and nothing is stored from it.
+    Activates when AI_API_KEY is configured (OpenAI-compatible endpoint)."""
+    import urllib.request as _u
+    key = os.environ.get("AI_API_KEY", "")
+    if not key:
+        raise HTTPException(501, "AI suggestions are not switched on yet — they arrive with the AI key. Your words stay private either way: text is only ever sent when you click for a suggestion.")
+    data = await request.json()
+    text = (data.get("text") or "")[:6000]
+    if len(text.strip()) < 10:
+        raise HTTPException(400, "Write a few sentences first, then ask for a suggestion.")
+    base = os.environ.get("AI_API_BASE", "https://api.openai.com/v1").rstrip("/")
+    payload = {"model": os.environ.get("AI_MODEL", "gpt-4o-mini"),
+               "messages": [{"role": "system", "content": "You help memoir writers. Reply with ONE short, concrete suggestion (a stronger opening line, a detail to add, or a gentler phrasing) for the passage. Keep the writer's voice. Under 60 words."},
+                            {"role": "user", "content": text}],
+               "max_tokens": 160}
+    try:
+        req = _u.Request(base + "/chat/completions", data=json.dumps(payload).encode(),
+                         headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
+        with _u.urlopen(req, timeout=30) as r:
+            out = json.loads(r.read().decode())
+        return {"suggestion": out["choices"][0]["message"]["content"].strip()}
+    except Exception:
+        raise HTTPException(502, "The AI helper is unreachable right now — try again in a moment.")
+
 
 # ---------- Discover / voting / publishers ----------
 @app.get("/api/discover")

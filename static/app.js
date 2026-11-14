@@ -306,7 +306,7 @@ async function showMyBooks(){
   app.innerHTML = `<h1>My Books</h1><div id="bookerr"></div>
     <div class="card"><h2>Start a new book</h2>
       <label>Title<input id="nb-title"></label>
-      <label>Type<select id="nb-type"><option>Memoir</option><option>Legacy Book</option><option>Chronicle</option><option>Testament</option><option>Photo Story</option></select></label>
+      <label>Type<select id="nb-type"><option>Memoir</option><option>Legacy Book</option><option>Chronicle</option><option>Testament</option><option>Photo Story</option><option>Journal</option><option>Diary</option></select></label>
       <label>About this book<textarea id="nb-desc" style="min-height:70px"></textarea></label>
       <button class="primary" id="nb-btn">Create book</button>
       <p class="muted">Free plan: 1 book. Paid plans: unlimited books, PDF export, testament setup.</p></div>
@@ -330,12 +330,28 @@ window.downloadPdf = async (id,btn) => {
   const blob = await r.blob(); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='remora-book.pdf'; a.click();
 };
 
+// ---------- Book editor with the writing studio (drafts, dictate, grammar, AI, scan, import) ----------
+const FONT_CLASSES = {serif:'font-serif', sans:'font-sans', hand:'font-hand', large:'font-large'};
+let chapStatus = {};       // chapterId -> 'draft' | 'published'
+let autosaveTimers = {};
+
+function ytId(u){ const m = String(u||'').match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([\w-]{6,})/); return m ? m[1] : null; }
+function renderChapterBody(body, media){
+  const byId = {}; (media||[]).forEach(m => byId[m.id] = m);
+  return esc(body || '').replace(/\[photo:(\d+)\]/g, (s, id) => byId[id] && byId[id].url ? `<img class="media" src="${byId[id].url}" alt="Photo in this chapter">` : '');
+}
+
 async function openEditor(id){
   const b = await api(`/api/books/${id}`);
+  const fontCls = FONT_CLASSES[b.font] || 'font-serif';
+  chapStatus = {}; (b.chapters || []).forEach(c => chapStatus[c.id] = c.status || 'published');
+  const isJournal = (b.type === 'Journal' || b.type === 'Diary');
   app.innerHTML = `<button class="ghost" onclick="showMyBooks()">← My Books</button>
   <h1>${esc(b.title)}</h1><div id="ederr"></div>
-  <div class="card"><h2>Book settings & sharing</h2>
+  <div class="card"><h2>Book settings &amp; sharing</h2>
     <label>Title<input id="bs-title" value="${esc(b.title)}"></label>
+    <label>Book font<select id="bs-font">
+      ${[['serif','Serif — the classic book look'],['sans','Sans — clean and modern'],['hand','Handwriting — personal, like a letter'],['large','Large print — extra big and easy to read']].map(([v,l])=>`<option value="${v}" ${b.font===v?'selected':''}>${l}</option>`).join('')}</select></label>
     <label>Sharing<select id="bs-vis">
       ${['private','family','public','testament'].map(v=>`<option ${b.visibility===v?'selected':''}>${v}</option>`).join('')}</select></label>
     <label>Family emails (comma-separated, for Family sharing)<input id="bs-family" value="${esc(b.family_emails)}"></label>
@@ -344,18 +360,54 @@ async function openEditor(id){
     <label><input type="checkbox" id="bs-pub" style="width:auto" ${b.publisher_optin?'checked':''}> Open to publishers (public books only — readers vote, top stories can be offered to publishers)</label><br>
     <button class="primary" id="bs-save">Save settings</button></div>
   <div class="card"><h2>Chapters — free writing</h2>
-    ${b.chapters.map(c=>`<div class="card"><label>Chapter title<input id="ct-${c.id}" value="${esc(c.title)}"></label>
+    <p class="muted">Everything saves itself as a <strong>draft</strong> while you write. Nothing is public until you press <strong>Publish</strong> on that chapter.</p>
+    ${isJournal ? `<button class="primary" id="today-btn">＋ Today's entry</button>` : ''}
+    ${b.chapters.map(c=>`<div class="card chapter-card"><label>Chapter title<input id="ct-${c.id}" value="${esc(c.title)}"></label>
       <label>Visibility<select id="cv-${c.id}">${['inherit','private','family','public','testament'].map(v=>`<option ${c.visibility===v?'selected':''}>${v}</option>`).join('')}</select></label>
-      <textarea id="cb-${c.id}">${esc(c.body)}</textarea>
-      <button class="ghost" onclick="saveChapter(${c.id})">Save chapter</button>
+      <span class="badge ${c.status==='draft'?'draft-badge':''}" id="cs-${c.id}">${c.status==='draft'?'Draft':'Published'}</span> <span class="muted saved-note" id="sv-${c.id}"></span>
+      <textarea id="cb-${c.id}" class="${fontCls}" spellcheck="true" autocorrect="on" autocapitalize="sentences">${esc(c.body)}</textarea>
+      <div class="toolrow">
+        <button class="ghost" onclick="toggleDictate(${c.id}, this)">🎙 Dictate</button>
+        <button class="ghost" onclick="runGrammar(${c.id})">✓ Check grammar</button>
+        <button class="ghost" onclick="runAI(${c.id})">✨ AI idea</button>
+        <button class="ghost" onclick="document.getElementById('cpf-${c.id}').click()">🖼 Photo in chapter</button>
+        <input type="file" id="cpf-${c.id}" accept="image/*" style="display:none" onchange="insertChapterPhoto(${c.id}, ${id}, this)">
+      </div>
+      <div id="ai-${c.id}"></div><div id="gram-${c.id}"></div>
+      <button class="ghost" onclick="saveChapter(${c.id})">Save now</button>
+      <button class="ghost" onclick="togglePublish(${c.id}, ${id})">${c.status==='draft'?'Publish chapter':'Move back to draft'}</button>
       <button class="ghost danger" onclick="deleteChapter(${c.id},${id})">Delete chapter</button></div>`).join('')}
-    <label>New chapter title<input id="nc-title"></label><textarea id="nc-body" placeholder="Write freely…"></textarea>
-    <button class="primary" id="nc-btn">Add chapter</button></div>
-  <div class="card"><h2>Photos, voice & media</h2>
-    ${b.media.map(m=> m.kind==='voice_transcript' ? `<p>🎙 Transcript: ${esc(m.transcript)}</p>` : m.kind==='audio' ? `<p>🎙 <audio controls src="${m.url}"></audio></p>` : `<img class="media" src="${m.url}" alt="${esc(m.original_name)}">`).join('')}
-    <label>Add a photo or voice/audio file<input id="md-file" type="file"></label>
-    <label>Kind<select id="md-kind"><option value="photo">photo</option><option value="audio">audio</option></select></label>
+    <label>New chapter title<input id="nc-title"></label>
+    <textarea id="nc-body" class="${fontCls}" spellcheck="true" autocorrect="on" autocapitalize="sentences" placeholder="Write freely — or dictate, scan a page, or import below. This box keeps its own draft on this device."></textarea>
+    <div class="toolrow">
+      <button class="ghost" onclick="toggleDictate('nc', this)">🎙 Dictate</button>
+      <button class="ghost" onclick="runGrammar('nc')">✓ Check grammar</button>
+      <button class="ghost" onclick="runAI('nc')">✨ AI idea</button>
+    </div>
+    <div id="ai-nc"></div><div id="gram-nc"></div>
+    <button class="primary" id="nc-btn">Add chapter as draft</button></div>
+  <div class="card"><h2>Bring your writing in</h2>
+    <label>Copy &amp; paste works anywhere above — paste straight from Word or Google Docs and the paragraphs come with it.</label>
+    <label>Google Docs link — import a whole document as a new draft chapter<input id="gd-link" placeholder="https://docs.google.com/document/d/…"></label>
+    <p class="muted">The document must be shared as “Anyone with the link can view” (in the Doc: Share → General access). Private docs connect with the Google sign-in setup.</p>
+    <button class="ghost" id="gd-btn">Import from Google Docs</button>
+    <label>Scan a page — take a photo of a handwritten or printed page and we will read it into words<input id="scan-file" type="file" accept="image/*"></label>
+    <button class="ghost" id="scan-btn">Read this page into the new-chapter box</button>
+    <p class="muted" id="scan-status"></p></div>
+  <div class="card"><h2>Photos, voice &amp; special messages</h2>
+    ${b.media.map(m=> mediaLine(m)).join('')}
+    <label>Add a photo, audio or video file<input id="md-file" type="file"></label>
+    <label>Kind<select id="md-kind"><option value="photo">photo</option><option value="audio">audio</option><option value="video">video message</option><option value="voiceover">voice-over</option></select></label>
     <button class="ghost" id="md-btn">Upload file</button>
+    <div class="toolrow">
+      <button class="ghost" id="rec-audio-btn">🎙 Record a voice-over</button>
+      <button class="ghost" id="rec-video-btn">🎥 Record a video message</button>
+      <button class="ghost danger" id="rec-stop-btn" style="display:none">■ Stop &amp; save recording</button>
+    </div>
+    <video id="rec-preview" controls playsinline style="display:none;max-width:100%;border-radius:10px"></video>
+    <p class="muted" id="rec-status"></p>
+    <label>…or link a YouTube message<input id="yt-link" placeholder="https://www.youtube.com/watch?v=…"></label>
+    <button class="ghost" id="yt-btn">Add YouTube message</button>
     <label>…or save a voice note as a transcript<textarea id="md-trans" style="min-height:60px"></textarea></label>
     <button class="ghost" id="md-trans-btn">Save voice transcript</button></div>
   <div class="card"><h2>Chronicle / Timeline</h2>
@@ -368,10 +420,19 @@ async function openEditor(id){
     <button class="ghost" id="lt-btn">Add letter</button></div>
   <p><button class="ghost" onclick="openReader(${id})">Read this book →</button> <a href="/api/books/${id}/pdf">Download PDF (paid plans)</a></p>`;
   document.getElementById('bs-save').onclick = async ()=>{
-    try { await api(`/api/books/${id}`,{method:'PUT',body:JSON.stringify({title:val('bs-title'),visibility:val('bs-vis'),family_emails:val('bs-family'),testament_recipients:val('bs-test'),release_note:val('bs-note'),publisher_optin:document.getElementById('bs-pub').checked})}); openEditor(id); }
+    try { await api(`/api/books/${id}`,{method:'PUT',body:JSON.stringify({title:val('bs-title'),visibility:val('bs-vis'),font:val('bs-font'),family_emails:val('bs-family'),testament_recipients:val('bs-test'),release_note:val('bs-note'),publisher_optin:document.getElementById('bs-pub').checked})}); openEditor(id); }
     catch(e){ errBox('ederr', e.message + (e.status===402 ? ' — see Pricing to upgrade.' : '')); }
   };
-  document.getElementById('nc-btn').onclick = async ()=>{ await api(`/api/books/${id}/chapters`,{method:'POST',body:JSON.stringify({title:val('nc-title'),body:val('nc-body')})}); openEditor(id); };
+  const todayBtn = document.getElementById('today-btn');
+  if (todayBtn) todayBtn.onclick = async ()=>{ const t = new Date().toLocaleDateString('en-US',{weekday:'long', year:'numeric', month:'long', day:'numeric'}); await api(`/api/books/${id}/chapters`,{method:'POST',body:JSON.stringify({title:t, body:'', status:'draft'})}); openEditor(id); };
+  document.getElementById('nc-btn').onclick = async ()=>{ await api(`/api/books/${id}/chapters`,{method:'POST',body:JSON.stringify({title:val('nc-title'),body:val('nc-body'),status:'draft'})}); try{ localStorage.removeItem('vv-draft-'+id); }catch(e){} openEditor(id); };
+  // local draft for the new-chapter box
+  try { const d = JSON.parse(localStorage.getItem('vv-draft-'+id) || 'null'); if (d) { if (d.title) document.getElementById('nc-title').value = d.title; if (d.body) document.getElementById('nc-body').value = d.body; } } catch(e){}
+  ['nc-title','nc-body'].forEach(el => { const n = document.getElementById(el); if (n) n.addEventListener('input', ()=>{ try{ localStorage.setItem('vv-draft-'+id, JSON.stringify({title:val('nc-title'), body:val('nc-body')})); }catch(e){} }); });
+  // autosave for existing chapters
+  (b.chapters || []).forEach(c => {
+    ['ct-'+c.id, 'cb-'+c.id].forEach(elid => { const n = document.getElementById(elid); if (n) n.addEventListener('input', ()=> scheduleAutosave(c.id)); });
+  });
   document.getElementById('md-btn').onclick = async ()=>{
     const f = document.getElementById('md-file').files[0]; if (!f) return alert('Choose a file first');
     const fd = new FormData(); fd.append('kind', val('md-kind')); fd.append('file', f);
@@ -381,23 +442,162 @@ async function openEditor(id){
     const fd = new FormData(); fd.append('kind','voice_transcript'); fd.append('transcript', val('md-trans'));
     const r = await fetch(`/api/books/${id}/media`,{method:'POST',body:fd}); if (!r.ok) return alert('Save failed'); openEditor(id);
   };
+  document.getElementById('yt-btn').onclick = async ()=>{
+    const fd = new FormData(); fd.append('kind','youtube'); fd.append('url', val('yt-link'));
+    const r = await fetch(`/api/books/${id}/media`,{method:'POST',body:fd}); if (!r.ok) { const j = await r.json().catch(()=>({})); return alert(j.detail || 'Could not add that link'); } openEditor(id);
+  };
+  document.getElementById('gd-btn').onclick = async ()=>{
+    try { const out = await api(`/api/books/${id}/import/google-doc`,{method:'POST',body:JSON.stringify({url:val('gd-link')})}); alert(`Imported “${out.title}” as a draft chapter (${out.chars} characters).`); openEditor(id); }
+    catch(e){ alert(e.message); }
+  };
+  document.getElementById('scan-btn').onclick = ()=> scanPage(id);
+  document.getElementById('rec-audio-btn').onclick = ()=> startRecording(id, false);
+  document.getElementById('rec-video-btn').onclick = ()=> startRecording(id, true);
+  document.getElementById('rec-stop-btn').onclick = ()=> stopRecording();
   document.getElementById('tl-btn').onclick = async ()=>{ await api(`/api/books/${id}/timeline`,{method:'POST',body:JSON.stringify({date_text:val('tl-date'),event_text:val('tl-event')})}); openEditor(id); };
   document.getElementById('lt-btn').onclick = async ()=>{ await api(`/api/books/${id}/letters`,{method:'POST',body:JSON.stringify({recipient_name:val('lt-to'),body:val('lt-body')})}); openEditor(id); };
 }
 window.openEditor = openEditor;
-window.saveChapter = async cid => { await api(`/api/chapters/${cid}`,{method:'PUT',body:JSON.stringify({title:val('ct-'+cid),body:val('cb-'+cid),visibility:val('cv-'+cid)})}); alert('Chapter saved'); };
+
+function mediaLine(m){
+  if (m.kind === 'voice_transcript') return `<p>🎙 Transcript: ${esc(m.transcript)}</p>`;
+  if (m.kind === 'audio' || m.kind === 'voiceover') return `<p>🎙 <audio controls src="${m.url}"></audio></p>`;
+  if (m.kind === 'video') return `<p>🎥 <video controls src="${m.url}" style="max-width:100%;border-radius:10px"></video></p>`;
+  if (m.kind === 'youtube') { const v = ytId(m.url); return v ? `<div class="yt-wrap"><iframe src="https://www.youtube.com/embed/${v}" title="YouTube message" allowfullscreen loading="lazy"></iframe></div>` : `<p>🎥 <a href="${esc(m.url)}" target="_blank" rel="noopener">YouTube message</a></p>`; }
+  return `<img class="media" src="${m.url}" alt="${esc(m.original_name)}">`;
+}
+
+// ----- autosave -----
+function scheduleAutosave(cid){
+  const note = document.getElementById('sv-'+cid); if (note) note.textContent = 'Writing…';
+  clearTimeout(autosaveTimers[cid]);
+  autosaveTimers[cid] = setTimeout(async ()=>{
+    try { await api(`/api/chapters/${cid}`,{method:'PUT',body:JSON.stringify({title:val('ct-'+cid), body:val('cb-'+cid), visibility:val('cv-'+cid), status:chapStatus[cid] || 'published'})});
+      const n2 = document.getElementById('sv-'+cid); if (n2) n2.textContent = 'Saved ' + new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+    } catch(e){ const n3 = document.getElementById('sv-'+cid); if (n3) n3.textContent = 'Could not save — check your connection'; }
+  }, 2000);
+}
+window.saveChapter = async cid => { try { await api(`/api/chapters/${cid}`,{method:'PUT',body:JSON.stringify({title:val('ct-'+cid),body:val('cb-'+cid),visibility:val('cv-'+cid),status:chapStatus[cid]||'published'})}); const n = document.getElementById('sv-'+cid); if (n) n.textContent = 'Saved ' + new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}); } catch(e){ alert(e.message); } };
+window.togglePublish = async (cid, bid) => { const next = (chapStatus[cid] === 'draft') ? 'published' : 'draft'; await window.saveChapter(cid); await api(`/api/chapters/${cid}`,{method:'PUT',body:JSON.stringify({status:next})}); chapStatus[cid] = next; openEditor(bid); };
 window.deleteChapter = async (cid,bid) => { if (confirm('Delete chapter?')) { await api(`/api/chapters/${cid}`,{method:'DELETE'}); openEditor(bid); } };
+
+// ----- dictation (speech typing) -----
+let _recog = null, _recogBtn = null;
+window.toggleDictate = (cid, btn) => {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const ta = document.getElementById(cid === 'nc' ? 'nc-body' : 'cb-'+cid);
+  if (!ta) return;
+  if (!SR) { alert('Dictation needs the Chrome browser (or your phone keyboard\u2019s microphone button — that works everywhere).'); return; }
+  if (_recog) { _recog.stop(); return; }
+  const r = new SR(); r.continuous = true; r.interimResults = true; r.lang = 'en-US';
+  let base = ta.value ? ta.value.replace(/\s+$/,'') + ' ' : ''; let finals = '';
+  r.onresult = e => { let interim = ''; for (let i = e.resultIndex; i < e.results.length; i++) { const t = e.results[i][0].transcript; if (e.results[i].isFinal) finals += t + ' '; else interim += t; } ta.value = base + finals + interim; ta.dispatchEvent(new Event('input')); };
+  r.onend = () => { _recog = null; if (_recogBtn) _recogBtn.textContent = '🎙 Dictate'; };
+  r.onerror = () => { _recog = null; if (_recogBtn) _recogBtn.textContent = '🎙 Dictate'; };
+  _recog = r; _recogBtn = btn; btn.textContent = '■ Stop dictating';
+  try { r.start(); } catch(e){ _recog = null; btn.textContent = '🎙 Dictate'; }
+};
+
+// ----- grammar check (writer-initiated; text sent only on this click) -----
+window.runGrammar = async cid => {
+  const ta = document.getElementById(cid === 'nc' ? 'nc-body' : 'cb-'+cid);
+  const box = document.getElementById('gram-'+cid); if (!ta || !box) return;
+  box.innerHTML = '<p class="muted">Checking… (your text is sent to the grammar checker only because you clicked — nothing is stored.)</p>';
+  try {
+    const out = await api('/api/grammar/check', {method:'POST', body: JSON.stringify({text: ta.value})});
+    if (!out.matches.length) { box.innerHTML = '<p class="muted">✓ Nothing flagged. Clean writing.</p>'; return; }
+    box.innerHTML = '<div class="sugg"><strong>Grammar &amp; spelling</strong>' + out.matches.slice(0,20).map((m,i)=>{
+      const bad = ta.value.substr(m.offset, m.length);
+      return `<p>${esc(m.message)} <em>“…${esc(bad)}…”</em> ${m.replacements.map(rep=>`<button class="ghost" onclick="applyFix('${cid}', ${m.offset}, ${m.length}, this)" data-rep="${esc(rep)}">Use “${esc(rep)}”</button>`).join(' ')}</p>`;
+    }).join('') + '</div>';
+  } catch(e){ box.innerHTML = `<p class="error">${esc(e.message)}</p>`; }
+};
+window.applyFix = (cid, offset, length, btn) => {
+  const ta = document.getElementById(cid === 'nc' ? 'nc-body' : 'cb-'+cid); if (!ta) return;
+  ta.value = ta.value.slice(0, offset) + btn.dataset.rep + ta.value.slice(offset + length);
+  ta.dispatchEvent(new Event('input'));
+  btn.outerHTML = '<span class="muted">fixed ✓ (run Check grammar again for the rest)</span>';
+};
+
+// ----- AI suggestions (writer-initiated; activates with the AI key) -----
+window.runAI = async cid => {
+  const ta = document.getElementById(cid === 'nc' ? 'nc-body' : 'cb-'+cid);
+  const box = document.getElementById('ai-'+cid); if (!ta || !box) return;
+  box.innerHTML = '<p class="muted">Thinking…</p>';
+  try { const out = await api('/api/ai/suggest', {method:'POST', body: JSON.stringify({text: ta.value.slice(-3000)})});
+    box.innerHTML = `<div class="sugg"><strong>✨ Suggestion</strong><p>${esc(out.suggestion)}</p><p class="muted">Your words stay yours — this passage was sent only because you clicked, and nothing from it is stored.</p></div>`;
+  } catch(e){ box.innerHTML = `<div class="sugg"><p>${esc(e.message)}</p></div>`; }
+};
+
+// ----- photo inside a chapter -----
+window.insertChapterPhoto = async (cid, bid, input) => {
+  const f = input.files[0]; if (!f) return;
+  const fd = new FormData(); fd.append('kind','photo'); fd.append('chapter_id', String(cid)); fd.append('file', f);
+  const r = await fetch(`/api/books/${bid}/media`, {method:'POST', body: fd});
+  if (!r.ok) return alert('Photo upload failed');
+  const m = await r.json();
+  const ta = document.getElementById('cb-'+cid); ta.value = (ta.value ? ta.value.replace(/\s+$/,'') + '\n\n' : '') + `[photo:${m.id}]\n`;
+  ta.dispatchEvent(new Event('input'));
+  alert('Photo placed in the chapter — it appears in the reader where the marker sits.');
+};
+
+// ----- scan a page (OCR in the browser) -----
+window.scanPage = async bid => {
+  const f = document.getElementById('scan-file').files[0];
+  const st = document.getElementById('scan-status');
+  if (!f) { st.textContent = 'Choose a photo of the page first.'; return; }
+  if (typeof Tesseract === 'undefined') { st.textContent = 'The page reader is still loading — try again in a few seconds.'; return; }
+  st.textContent = 'Reading the page… this can take up to a minute.';
+  try {
+    const res = await Tesseract.recognize(f, 'eng', { logger: m => { if (m.status === 'recognizing text') st.textContent = 'Reading the page… ' + Math.round(m.progress * 100) + '%'; } });
+    const text = (res.data.text || '').trim();
+    if (!text) { st.textContent = 'No words could be read from that photo. Try a closer, brighter photo, flat to the page.'; return; }
+    const ta = document.getElementById('nc-body');
+    ta.value = (ta.value ? ta.value.replace(/\s+$/,'') + '\n\n' : '') + text;
+    ta.dispatchEvent(new Event('input'));
+    if (!val('nc-title')) document.getElementById('nc-title').value = 'Scanned pages';
+    st.textContent = 'Done — the words are in the new-chapter box below the chapters. Read them over, fix any misreads, then “Add chapter as draft.” Printed pages read best; handwriting varies.';
+  } catch(e){ st.textContent = 'Reading failed on this photo. Try a clearer one.'; }
+};
+
+// ----- record a voice-over / video message in the browser -----
+let _mr = null, _chunks = [], _stream = null, _recKind = 'voiceover';
+window.startRecording = async (bid, withVideo) => {
+  const st = document.getElementById('rec-status'); const pv = document.getElementById('rec-preview');
+  try { _stream = await navigator.mediaDevices.getUserMedia({audio: true, video: withVideo}); }
+  catch(e){ st.textContent = 'The browser could not reach the camera/microphone. You can also record with your phone\u2019s camera app and upload the file above.'; return; }
+  _recKind = withVideo ? 'video' : 'voiceover'; _chunks = [];
+  if (withVideo) { pv.style.display = 'block'; pv.srcObject = _stream; pv.muted = true; pv.play(); }
+  _mr = new MediaRecorder(_stream);
+  _mr.ondataavailable = e => { if (e.data.size) _chunks.push(e.data); };
+  _mr.onstop = async () => {
+    if (_stream) _stream.getTracks().forEach(t => t.stop());
+    pv.style.display = 'none'; document.getElementById('rec-stop-btn').style.display = 'none';
+    const blob = new Blob(_chunks, {type: _mr.mimeType || 'video/webm'});
+    st.textContent = 'Saving your recording…';
+    const fd = new FormData(); fd.append('kind', _recKind); fd.append('file', new File([blob], 'recording.webm'));
+    const r = await fetch(`/api/books/${bid}/media`, {method:'POST', body: fd});
+    if (r.ok) { st.textContent = 'Saved ✓'; openEditor(bid); } else st.textContent = 'Saving failed — the recording could not be uploaded.';
+  };
+  document.getElementById('rec-stop-btn').style.display = 'inline-block';
+  st.textContent = withVideo ? 'Recording video… speak as long as you like, then Stop & save.' : 'Recording your voice… then Stop & save.';
+  _mr.start();
+};
+window.stopRecording = () => { if (_mr && _mr.state !== 'inactive') _mr.stop(); };
 
 window.openReader = async id => {
   try {
     const b = await api(`/api/books/${id}`);
+    const fontCls = FONT_CLASSES[b.font] || 'font-serif';
+    const special = (b.media || []).filter(m => ['audio','voiceover','video','youtube'].includes(m.kind));
     app.innerHTML = `<button class="ghost" onclick="showDiscover()">← Discover</button>
     <h1>${esc(b.title)}</h1><p class="muted">by ${esc(b.author_name||'you')} · ${esc(b.type)} · ♥ ${b.votes} votes ${b.publisher_optin?'· Open to publishers':''}</p>
     <p>${esc(b.description)}</p>
     <button class="primary" id="vote-btn" ${b.my_vote?'disabled':''}>${b.my_vote?'You voted ♥':'Vote for this story'}</button>
-    ${b.chapters.map(c=>`<div class="card"><h2>${esc(c.title)}</h2><div class="prose">${esc(c.body)}</div></div>`).join('')}
+    ${b.chapters.map(c=>`<div class="card"><h2>${esc(c.title)}</h2><div class="prose ${fontCls}">${renderChapterBody(c.body, b.media)}</div></div>`).join('')}
+    ${special.length?`<div class="card"><h2>Special messages</h2>${special.map(m=>mediaLine(m)).join('')}</div>`:''}
     ${b.timeline.length?`<div class="card"><h2>Chronicle</h2>${b.timeline.map(t=>`<p><strong>${esc(t.date_text)}</strong> — ${esc(t.event_text)}</p>`).join('')}</div>`:''}
-    ${b.media.filter(m=>m.kind==='photo').map(m=>`<img class="media" src="${m.url}">`).join('')}`;
+    ${b.media.filter(m=>m.kind==='photo' && !m.chapter_id).map(m=>`<img class="media" src="${m.url}">`).join('')}`;
     document.getElementById('vote-btn').onclick = async ()=>{ try { await api(`/api/books/${id}/vote`,{method:'POST'}); openReader(id); } catch(e){ alert(e.message); } };
   } catch(e){ app.innerHTML = `<p class="error">${esc(e.message)}</p>`; }
 };
