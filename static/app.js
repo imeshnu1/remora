@@ -22,6 +22,7 @@ function route(name){
   if (name==='discover') return showDiscover();
   if (name==='publishers') return showPublishers();
   if (name==='pricing') return showPricing();
+  if (name==='account') return me && me.id ? showAccount() : showAuth();
   return me && me.id ? showMyBooks() : showAuth();
 }
 function showAuth(){
@@ -354,6 +355,47 @@ async function showPricing(){
     ${me && me.id ? `<button class="primary" onclick="buyPlan('${p.id}')">${me.plan===p.id?'Current plan':'Choose '+esc(p.name)}</button>` : '<p class="muted">Sign in to choose a plan.</p>'}</div>`).join('')}</div>`;
 }
 window.buyPlan = async plan => { try { const r = await api('/api/checkout',{method:'POST',body:JSON.stringify({plan})}); me.plan = r.user.plan; renderUserbox(); showPricing(); alert('Simulated checkout complete — plan is now: '+me.plan); } catch(e){ alert(e.message); } };
+const EMAIL_KINDS = {welcome:'Welcome', next_steps:'Getting started', payment_receipt:'Payment receipt', account_updated:'Account update', account_cancelled:'Account closed', app_update:'Viavios news'};
+async function showAccount(){
+  app.innerHTML = `<h1>Your account</h1><div id="accerr"></div>
+  <div class="grid">
+    <div class="card"><h3>Profile</h3>
+      <label>Your name<input id="ac-name" value="${esc(me.name)}"></label>
+      <label>Email<input value="${esc(me.email)}" disabled></label>
+      <p class="muted">Plan: ${esc(me.plan)}</p>
+      <button class="primary" id="ac-save">Save changes</button></div>
+    <div class="card"><h3>Change password</h3>
+      <label>Current password<input id="ac-cur" type="password"></label>
+      <label>New password (6+ characters)<input id="ac-new" type="password"></label>
+      <button class="primary" id="ac-pass">Change password</button></div>
+  </div>
+  <div class="card" style="margin-top:18px"><h3>Emails we've sent you</h3><div id="ac-emails"><p class="muted">Loading…</p></div>
+    <p class="muted">“Stored” means the email was created and kept safely in your account history; once a sending service is connected, these arrive in your inbox as well.</p></div>
+  <div class="card" style="margin-top:18px"><h3>Close account</h3>
+    <p>Closing your account deletes your books, chapters, photos, and letters. This cannot be undone. We will email you a confirmation.</p>
+    <label>Confirm your password<input id="ac-del-pass" type="password"></label>
+    <button id="ac-del">Close my account</button></div>`;
+  document.getElementById('ac-save').onclick = async ()=>{
+    try { me = await api('/api/me',{method:'PATCH',body:JSON.stringify({name:val('ac-name')})}); renderUserbox(); showAccount(); alert('Saved. A confirmation email is in your account history.'); }
+    catch(e){ errBox('accerr', e.message); }
+  };
+  document.getElementById('ac-pass').onclick = async ()=>{
+    try { await api('/api/me',{method:'PATCH',body:JSON.stringify({current_password:val('ac-cur'),new_password:val('ac-new')})}); showAccount(); alert('Password changed. A confirmation email is in your account history.'); }
+    catch(e){ errBox('accerr', e.message); }
+  };
+  document.getElementById('ac-del').onclick = async ()=>{
+    if (!confirm('Close your account and delete all your books? This cannot be undone.')) return;
+    try { await api('/api/me',{method:'DELETE',body:JSON.stringify({password:val('ac-del-pass')})}); me=null; renderUserbox(); showAuth(); alert('Your account is closed. A confirmation email was sent.'); }
+    catch(e){ errBox('accerr', e.message); }
+  };
+  try {
+    const rows = await api('/api/me/emails');
+    document.getElementById('ac-emails').innerHTML = rows.length
+      ? `<ul>${rows.map(r=>`<li><strong>${esc(EMAIL_KINDS[r.kind]||r.kind)}</strong> — ${esc(r.subject)} <span class="muted">(${esc(r.status)}, ${esc((r.created_at||'').slice(0,10))})</span></li>`).join('')}</ul>`
+      : '<p class="muted">No emails yet.</p>';
+  } catch(e){ document.getElementById('ac-emails').innerHTML = '<p class="muted">Could not load email history.</p>'; }
+}
+window.showAccount = showAccount;
 window.showMyBooks = showMyBooks; window.showDiscover = showDiscover; window.showPricing = showPricing;
 
 (async ()=>{ try { const m = await api('/api/me'); me = (m && m.id) ? m : null; } catch(e){ me=null; } renderUserbox(); route('mybooks'); })();

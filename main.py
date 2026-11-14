@@ -14,6 +14,8 @@ from sqlalchemy import (create_engine, Column, Integer, String, Text, Boolean,
                         DateTime, ForeignKey, UniqueConstraint)
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
+from emails import render_email, deliver as deliver_email
+
 BASE_DIR = Path(__file__).parent
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./remora.db")
 if DATABASE_URL.startswith("postgres://"):
@@ -37,6 +39,19 @@ class User(Base):
     email = Column(String(255), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
     plan = Column(String(40), default="free", nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class EmailOutbox(Base):
+    __tablename__ = "email_outbox"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    to_email = Column(String(255), nullable=False)
+    kind = Column(String(40), nullable=False)
+    subject = Column(String(300), nullable=False)
+    body_text = Column(Text, nullable=False)
+    body_html = Column(Text, nullable=False)
+    status = Column(String(20), default="stored", nullable=False)  # sent | stored | failed
+    error = Column(String(300), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class SessionToken(Base):
@@ -146,6 +161,25 @@ def require_user(request: Request, db: Session = Depends(get_db)):
 def user_json(u: User):
     return {"id": u.id, "name": u.name, "email": u.email, "plan": u.plan, "is_paid": u.plan in PAID_PLANS}
 
+def queue_email(db: Session, user, kind: str, to_email: str = None, name: str = None, **ctx):
+    """Render, record, and deliver one transactional email. Never raises:
+    an email problem must not break the action that triggered it."""
+    try:
+        subject, text, html = render_email(kind, {"name": name or (user.name if user else ""), **ctx})
+        row = EmailOutbox(user_id=(user.id if user else None),
+                          to_email=to_email or (user.email if user else ""),
+                          kind=kind, subject=subject, body_text=text, body_html=html,
+                          status="stored")
+        db.add(row); db.commit(); db.refresh(row)
+        status, error = deliver_email(row.to_email, subject, text, html)
+        row.status, row.error = status, error
+        db.commit()
+        return row
+    except Exception:
+        try: db.rollback()
+        except Exception: pass
+        return None
+
 def vote_count(db: Session, book_id: int) -> int:
     return db.query(Vote).filter_by(book_id=book_id).count()
 
@@ -192,6 +226,8 @@ async def signup(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(400, "An account with that email already exists")
     u = User(name=name, email=email, password_hash=hash_password(password), plan="free")
     db.add(u); db.commit(); db.refresh(u)
+    queue_email(db, u, "welcome")
+    queue_email(db, u, "next_steps")
     return set_session(db, u)
 
 @app.post("/api/signin")
@@ -223,6 +259,69 @@ def signout(request: Request, db: Session = Depends(get_db)):
 def me(request: Request, db: Session = Depends(get_db)):
     u = current_user(request, db)
     return user_json(u) if u else JSONResponse({"user": None}, status_code=200) if False else (user_json(u) if u else {"id": None})
+
+@app.get("/api/me/emails")
+def my_emails(db: Session = Depends(get_db), user: User = Depends(require_user)):
+    rows = db.query(EmailOutbox).filter_by(user_id=user.id).order_by(EmailOutbox.created_at.desc(), EmailOutbox.id.desc()).limit(50).all()
+    return [{"id": r.id, "kind": r.kind, "subject": r.subject, "status": r.status,
+             "created_at": r.created_at.isoformat() if r.created_at else None} for r in rows]
+
+@app.patch("/api/me")
+async def update_me(request: Request, db: Session = Depends(get_db), user: User = Depends(require_user)):
+    data = await request.json()
+    changes = []
+    new_name = (data.get("name") or "").strip()
+    if new_name and new_name != user.name:
+        user.name = new_name
+        changes.append("your display name was changed")
+    new_password = data.get("new_password") or ""
+    if new_password:
+        if not verify_password(data.get("current_password") or "", user.password_hash):
+            raise HTTPException(400, "Current password is wrong")
+        if len(new_password) < 6:
+            raise HTTPException(400, "New password needs 6+ characters")
+        user.password_hash = hash_password(new_password)
+        changes.append("your password was changed")
+    if not changes:
+        raise HTTPException(400, "Nothing to change")
+    db.commit(); db.refresh(user)
+    queue_email(db, user, "account_updated", changes=" and ".join(changes))
+    return user_json(user)
+
+@app.delete("/api/me")
+async def delete_me(request: Request, db: Session = Depends(get_db), user: User = Depends(require_user)):
+    data = await request.json()
+    if not verify_password(data.get("password") or "", user.password_hash):
+        raise HTTPException(400, "Password confirmation is wrong")
+    name, email = user.name, user.email
+    book_ids = [b.id for b in db.query(Book).filter_by(owner_id=user.id).all()]
+    if book_ids:
+        for model in (Chapter, Media, TimelineEntry, Letter, Vote):
+            db.query(model).filter(model.book_id.in_(book_ids)).delete(synchronize_session=False)
+    db.query(Book).filter_by(owner_id=user.id).delete(synchronize_session=False)
+    db.query(Vote).filter_by(user_id=user.id).delete(synchronize_session=False)
+    db.query(SessionToken).filter_by(user_id=user.id).delete(synchronize_session=False)
+    db.query(EmailOutbox).filter_by(user_id=user.id).update({"user_id": None}, synchronize_session=False)
+    db.delete(user); db.commit()
+    queue_email(db, None, "account_cancelled", to_email=email, name=name)
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie("remora_session")
+    return resp
+
+@app.post("/api/app-updates")
+async def app_update(request: Request, db: Session = Depends(get_db)):
+    key = os.environ.get("APP_UPDATE_KEY")
+    if not key or request.headers.get("x-admin-key") != key:
+        raise HTTPException(403, "Not authorized")
+    data = await request.json()
+    subject = (data.get("subject") or "").strip()
+    message = (data.get("message") or "").strip()
+    if not subject or not message:
+        raise HTTPException(400, "Subject and message are required")
+    users = db.query(User).all()
+    for u in users:
+        queue_email(db, u, "app_update", subject=subject, message=message)
+    return {"ok": True, "recipients": len(users)}
 
 # ---------- Books ----------
 @app.get("/api/books")
@@ -411,6 +510,9 @@ async def checkout(request: Request, db: Session = Depends(get_db), user: User =
     # SIMULATED checkout: no real payment is taken. Stripe replaces this endpoint at real launch (see README).
     user.plan = plan
     db.commit()
+    plan_info = next((p for p in PLANS if p["id"] == plan), {"name": plan, "price": ""})
+    queue_email(db, user, "payment_receipt", plan_name=plan_info["name"], price=plan_info["price"],
+                date=datetime.utcnow().strftime("%B %d, %Y"), simulated=True)
     return {"ok": True, "simulated": True, "user": user_json(user)}
 
 # ---------- PDF export (paid gate) ----------
