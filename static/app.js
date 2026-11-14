@@ -15,7 +15,7 @@ function renderUserbox(){
     ? `<span class="badge">${esc(me.name)} · ${esc(me.plan)}</span> <button id="signout">Sign out</button>`
     : `<button id="signin-nav">Sign in</button>`;
   const so = document.getElementById('signout'); if (so) so.onclick = async ()=>{ await fetch('/api/signout',{method:'POST'}); me=null; renderUserbox(); showAuth(); };
-  const si = document.getElementById('signin-nav'); if (si) si.onclick = showAuth;
+  const si = document.getElementById('signin-nav'); if (si) si.onclick = ()=>{ showAuth(); openAuthModal('signin'); };
 }
 document.querySelectorAll('[data-nav]').forEach(b => b.onclick = ()=> route(b.dataset.nav));
 function route(name){
@@ -29,14 +29,10 @@ function showAuth(){
   app.innerHTML = `<figure class="hero"><img class="hero-img" src="/static/img/hero-family.jpg" alt="Three generations of one family laughing together around the kitchen table">
   <figcaption class="hero-caption"><h1>Write the book of your life.</h1></figcaption></figure>
   <p>Viavios is where anybody can make their own memoir, legacy book, chronicle, testament, or photo story — in your own words, your own pictures, or your own voice.</p>
-  <div class="grid">
-    <div class="card" id="create-card"><h2>Create account</h2><div id="autherr"></div>
-      <label>Your name<input id="su-name"></label><label>Email<input id="su-email" type="email"></label>
-      <label>Password (6+ characters)<input id="su-pass" type="password"></label>
-      <button class="primary" id="su-btn">Create my account</button></div>
-    <div class="card"><h2>Sign in</h2>
-      <label>Email<input id="si-email" type="email"></label><label>Password<input id="si-pass" type="password"></label>
-      <button class="primary" id="si-btn">Sign in</button></div>
+  <div class="hero-cta">
+    <button class="primary big" id="cta-hero-signup">Create your free account</button>
+    <button class="big" id="cta-hero-signin">Sign in</button>
+    <p class="muted">Free to start — your first book is on us. Sign up with Google, a passkey, or your email.</p>
   </div>
   <h2 style="margin-top:30px">Stories people are writing</h2>
   <div id="landing-stories"><p class="muted">Loading stories…</p></div>
@@ -51,22 +47,97 @@ function showAuth(){
   <div class="landing-cta"><button class="primary" id="cta-paths">Begin your story — create your free account</button></div></div>
   <div class="landing-cta"><p><strong>Your life is a story too — start writing yours.</strong></p>
   <button class="primary" id="cta-write">Start writing — create your free account</button></div>`;
-  document.getElementById('su-btn').onclick = async ()=>{
-    try { me = await api('/api/signup',{method:'POST',body:JSON.stringify({name:val('su-name'),email:val('su-email'),password:val('su-pass')})}); renderUserbox(); showMyBooks(); }
-    catch(e){ errBox('autherr', e.message); }
-  };
-  document.getElementById('si-btn').onclick = async ()=>{
-    try { me = await api('/api/signin',{method:'POST',body:JSON.stringify({email:val('si-email'),password:val('si-pass')})}); renderUserbox(); showMyBooks(); }
-    catch(e){ errBox('autherr', e.message); }
-  };
-  const goCreate = ()=>{
-    document.getElementById('create-card').scrollIntoView({behavior:'smooth',block:'center'});
-    document.getElementById('su-name').focus({preventScroll:true});
-  };
-  document.getElementById('cta-write').onclick = goCreate;
-  document.getElementById('cta-paths').onclick = goCreate;
+  document.getElementById('cta-hero-signup').onclick = ()=> openAuthModal('signup');
+  document.getElementById('cta-hero-signin').onclick = ()=> openAuthModal('signin');
+  document.getElementById('cta-write').onclick = ()=> openAuthModal('signup');
+  document.getElementById('cta-paths').onclick = ()=> openAuthModal('signup');
   loadLandingStories();
 }
+// ---------- Auth popup (modal): email, Google, Apple, passkeys ----------
+const b64uToBuf = s => { s = String(s).replace(/-/g,'+').replace(/_/g,'/'); while (s.length % 4) s += '='; const bin = atob(s); const buf = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i); return buf.buffer; };
+const bufToB64u = b => { let s = ''; new Uint8Array(b).forEach(c => s += String.fromCharCode(c)); return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); };
+function closeAuthModal(){ const m = document.getElementById('auth-modal'); if (m) m.remove(); }
+async function openAuthModal(tab='signup'){
+  closeAuthModal();
+  let providers = {google:false, apple:false};
+  try { providers = await api('/api/auth/providers'); } catch(e) {}
+  const overlay = document.createElement('div');
+  overlay.id = 'auth-modal'; overlay.className = 'modal-overlay';
+  overlay.innerHTML = `<div class="modal card">
+    <button class="modal-x" id="am-x" aria-label="Close">×</button>
+    <h2 id="am-title">${tab==='signup' ? 'Create your account' : 'Welcome back'}</h2>
+    <div class="tabs"><button id="am-tab-su" class="${tab==='signup'?'tab-on':''}">Create account</button><button id="am-tab-si" class="${tab==='signin'?'tab-on':''}">Sign in</button></div>
+    <div id="am-err"></div>
+    <div id="am-su" ${tab!=='signup'?'hidden':''}>
+      <label>Your name<input id="am-su-name"></label>
+      <label>Email<input id="am-su-email" type="email"></label>
+      <label>Password (6+ characters)<input id="am-su-pass" type="password"></label>
+      <button class="primary wide" id="am-su-btn">Create my account</button></div>
+    <div id="am-si" ${tab!=='signin'?'hidden':''}>
+      <label>Email<input id="am-si-email" type="email"></label>
+      <label>Password<input id="am-si-pass" type="password"></label>
+      <button class="primary wide" id="am-si-btn">Sign in</button></div>
+    <div class="divider"><span>or</span></div>
+    ${providers.google ? '<a class="oauth-btn" href="/auth/google/start">Continue with Google</a>' : '<button class="oauth-btn" id="am-google-off">Continue with Google</button>'}
+    ${providers.apple ? '<a class="oauth-btn" href="/auth/apple/start">Continue with Apple</a>' : '<button class="oauth-btn" id="am-apple-off">Continue with Apple</button>'}
+    <button class="oauth-btn" id="am-passkey">Sign in with a passkey</button>
+    <p class="muted" style="text-align:center">A passkey uses your face, fingerprint, or screen lock — no password to remember.</p>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) closeAuthModal(); });
+  document.getElementById('am-x').onclick = closeAuthModal;
+  const setTab = t => {
+    document.getElementById('am-su').hidden = t !== 'signup';
+    document.getElementById('am-si').hidden = t !== 'signin';
+    document.getElementById('am-tab-su').className = t === 'signup' ? 'tab-on' : '';
+    document.getElementById('am-tab-si').className = t === 'signin' ? 'tab-on' : '';
+    document.getElementById('am-title').textContent = t === 'signup' ? 'Create your account' : 'Welcome back';
+  };
+  document.getElementById('am-tab-su').onclick = ()=> setTab('signup');
+  document.getElementById('am-tab-si').onclick = ()=> setTab('signin');
+  document.getElementById('am-su-btn').onclick = async ()=>{
+    try { me = await api('/api/signup',{method:'POST',body:JSON.stringify({name:val('am-su-name'),email:val('am-su-email'),password:val('am-su-pass')})}); closeAuthModal(); renderUserbox(); showMyBooks(); }
+    catch(e){ errBox('am-err', e.message); }
+  };
+  document.getElementById('am-si-btn').onclick = async ()=>{
+    try { me = await api('/api/signin',{method:'POST',body:JSON.stringify({email:val('am-si-email'),password:val('am-si-pass')})}); closeAuthModal(); renderUserbox(); showMyBooks(); }
+    catch(e){ errBox('am-err', e.message); }
+  };
+  const off = (id, msg) => { const b = document.getElementById(id); if (b) b.onclick = ()=> errBox('am-err', msg); };
+  off('am-google-off', 'Google sign-in is being switched on — for now, your email and password work right away.');
+  off('am-apple-off', 'Apple sign-in needs the Apple Developer setup first — for now, Google, a passkey, or your email work right away.');
+  document.getElementById('am-passkey').onclick = async ()=>{
+    try { await passkeyLogin(); }
+    catch(e){ errBox('am-err', e.message || 'That passkey sign-in was cancelled.'); }
+  };
+}
+async function passkeyLogin(){
+  if (!window.PublicKeyCredential) throw new Error('This browser does not support passkeys.');
+  const opts = await api('/api/passkeys/login/options', {method:'POST'});
+  opts.challenge = b64uToBuf(opts.challenge);
+  (opts.allowCredentials || []).forEach(c => c.id = b64uToBuf(c.id));
+  const cred = await navigator.credentials.get({publicKey: opts});
+  const body = {id: cred.id, rawId: bufToB64u(cred.rawId), type: cred.type,
+    response: {clientDataJSON: bufToB64u(cred.response.clientDataJSON), authenticatorData: bufToB64u(cred.response.authenticatorData),
+               signature: bufToB64u(cred.response.signature), userHandle: cred.response.userHandle ? bufToB64u(cred.response.userHandle) : null},
+    clientExtensionResults: {}};
+  me = await api('/api/passkeys/login/verify', {method:'POST', body: JSON.stringify(body)});
+  closeAuthModal(); renderUserbox(); showMyBooks();
+}
+async function passkeyAdd(){
+  if (!window.PublicKeyCredential) throw new Error('This browser does not support passkeys.');
+  const opts = await api('/api/passkeys/register/options', {method:'POST'});
+  opts.challenge = b64uToBuf(opts.challenge);
+  opts.user.id = b64uToBuf(opts.user.id);
+  (opts.excludeCredentials || []).forEach(c => c.id = b64uToBuf(c.id));
+  const cred = await navigator.credentials.create({publicKey: opts});
+  const body = {id: cred.id, rawId: bufToB64u(cred.rawId), type: cred.type,
+    response: {clientDataJSON: bufToB64u(cred.response.clientDataJSON), attestationObject: bufToB64u(cred.response.attestationObject),
+               transports: cred.response.getTransports ? cred.response.getTransports() : []},
+    clientExtensionResults: {}};
+  await api('/api/passkeys/register/verify', {method:'POST', body: JSON.stringify(body)});
+}
+window.openAuthModal = openAuthModal; window.closeAuthModal = closeAuthModal;
 // Landing-page stories: real public books from /api/discover first; clearly
 // labeled sample stories only fill the row when there are fewer than 3 real ones.
 const IMG = {
@@ -201,7 +272,7 @@ function renderGlance(g){
     <div class="prose glance-excerpt">${esc(g.excerpt)}</div>
     ${g.inside && g.inside.length ? `<div class="glance-inside">${g.inside.map(u => `<img src="${esc(u)}" alt="A photograph from inside the book">`).join('')}</div>` : ''}
     <p class="muted glance-note">This is a look inside — a beginning, not the whole book.</p>
-    ${g.bookId ? `<button class="primary" onclick="closeGlance();openReader(${g.bookId})">Read the whole story</button>` : `<button class="primary" onclick="closeGlance();document.getElementById('create-card') && document.getElementById('create-card').scrollIntoView({behavior:'smooth',block:'center'})">Start your own story</button>`}
+    ${g.bookId ? `<button class="primary" onclick="closeGlance();openReader(${g.bookId})">Read the whole story</button>` : `<button class="primary" onclick="closeGlance();openAuthModal('signup')">Start your own story</button>`}
   </div>`;
   el.addEventListener('click', e => { if (e.target === el) closeGlance(); });
   document.body.appendChild(el);
@@ -369,6 +440,10 @@ async function showAccount(){
       <label>New password (6+ characters)<input id="ac-new" type="password"></label>
       <button class="primary" id="ac-pass">Change password</button></div>
   </div>
+  <div class="card" style="margin-top:18px"><h3>Passkeys</h3>
+    <p>Sign in with your face, fingerprint, or screen lock — no password to remember. Passkeys live on your phone or computer (Apple, Android, Windows) and sync with your account there.</p>
+    <div id="ac-passkeys"><p class="muted">Loading…</p></div>
+    <button class="primary" id="ac-add-passkey">Add a passkey on this device</button></div>
   <div class="card" style="margin-top:18px"><h3>Emails we've sent you</h3><div id="ac-emails"><p class="muted">Loading…</p></div>
     <p class="muted">“Stored” means the email was created and kept safely in your account history; once a sending service is connected, these arrive in your inbox as well.</p></div>
   <div class="card" style="margin-top:18px"><h3>Close account</h3>
@@ -388,6 +463,16 @@ async function showAccount(){
     try { await api('/api/me',{method:'DELETE',body:JSON.stringify({password:val('ac-del-pass')})}); me=null; renderUserbox(); showAuth(); alert('Your account is closed. A confirmation email was sent.'); }
     catch(e){ errBox('accerr', e.message); }
   };
+  document.getElementById('ac-add-passkey').onclick = async ()=>{
+    try { await passkeyAdd(); showAccount(); alert('Passkey added. Next time, sign in with the passkey button.'); }
+    catch(e){ errBox('accerr', e.message || 'That was cancelled.'); }
+  };
+  try {
+    const pks = await api('/api/me/passkeys');
+    document.getElementById('ac-passkeys').innerHTML = pks.length
+      ? `<ul>${pks.map(p=>`<li>Passkey added ${esc((p.created_at||'').slice(0,10))} <button onclick="delPasskey(${p.id})">Remove</button></li>`).join('')}</ul>`
+      : '<p class="muted">No passkeys yet.</p>';
+  } catch(e){ document.getElementById('ac-passkeys').innerHTML = '<p class="muted">Could not load passkeys.</p>'; }
   try {
     const rows = await api('/api/me/emails');
     document.getElementById('ac-emails').innerHTML = rows.length
@@ -396,6 +481,7 @@ async function showAccount(){
   } catch(e){ document.getElementById('ac-emails').innerHTML = '<p class="muted">Could not load email history.</p>'; }
 }
 window.showAccount = showAccount;
+window.delPasskey = async id => { if (!confirm('Remove this passkey?')) return; try { await api('/api/me/passkeys/'+id, {method:'DELETE'}); showAccount(); } catch(e){ alert(e.message); } };
 window.showMyBooks = showMyBooks; window.showDiscover = showDiscover; window.showPricing = showPricing;
 
 (async ()=>{ try { const m = await api('/api/me'); me = (m && m.id) ? m : null; } catch(e){ me=null; } renderUserbox(); route('mybooks'); })();

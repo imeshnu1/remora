@@ -37,8 +37,29 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(120), nullable=False)
     email = Column(String(255), unique=True, nullable=False, index=True)
-    password_hash = Column(String(255), nullable=False)
+    password_hash = Column(String(255), nullable=True)  # None for Google/passkey-only accounts
+    auth_provider = Column(String(40), default="password", nullable=False)  # password | google
+    provider_sub = Column(String(255), nullable=True)
     plan = Column(String(40), default="free", nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class PasskeyCredential(Base):
+    __tablename__ = "passkey_credentials"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    credential_id = Column(String(512), unique=True, nullable=False, index=True)  # base64url
+    public_key = Column(Text, nullable=False)  # base64url of the COSE public key bytes
+    sign_count = Column(Integer, default=0, nullable=False)
+    transports = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class AuthChallenge(Base):
+    __tablename__ = "auth_challenges"
+    id = Column(Integer, primary_key=True)
+    flow_id = Column(String(64), unique=True, nullable=False, index=True)
+    purpose = Column(String(20), nullable=False)  # passkey_register | passkey_login | google
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    challenge = Column(String(512), nullable=False)  # base64url (webauthn) or oauth state token
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class EmailOutbox(Base):
@@ -235,7 +256,11 @@ async def signin(request: Request, db: Session = Depends(get_db)):
     data = await request.json()
     email = (data.get("email") or "").strip().lower()
     u = db.query(User).filter_by(email=email).first()
-    if not u or not verify_password(data.get("password") or "", u.password_hash):
+    if not u:
+        raise HTTPException(401, "Wrong email or password")
+    if not u.password_hash:
+        raise HTTPException(401, "This account was created with Google or a passkey — please use that to sign in")
+    if not verify_password(data.get("password") or "", u.password_hash):
         raise HTTPException(401, "Wrong email or password")
     return set_session(db, u)
 
@@ -301,6 +326,8 @@ async def delete_me(request: Request, db: Session = Depends(get_db), user: User 
     db.query(Book).filter_by(owner_id=user.id).delete(synchronize_session=False)
     db.query(Vote).filter_by(user_id=user.id).delete(synchronize_session=False)
     db.query(SessionToken).filter_by(user_id=user.id).delete(synchronize_session=False)
+    db.query(PasskeyCredential).filter_by(user_id=user.id).delete(synchronize_session=False)
+    db.query(AuthChallenge).filter_by(user_id=user.id).delete(synchronize_session=False)
     db.query(EmailOutbox).filter_by(user_id=user.id).update({"user_id": None}, synchronize_session=False)
     db.delete(user); db.commit()
     queue_email(db, None, "account_cancelled", to_email=email, name=name)
@@ -322,6 +349,187 @@ async def app_update(request: Request, db: Session = Depends(get_db)):
     for u in users:
         queue_email(db, u, "app_update", subject=subject, message=message)
     return {"ok": True, "recipients": len(users)}
+
+# ---------- Modern sign-in: Google, passkeys, Apple ----------
+import base64, json as _json, urllib.parse, urllib.request as _urlreq
+from fastapi.responses import RedirectResponse
+
+def _b64u_dec(s: str) -> bytes:
+    return base64.urlsafe_b64decode((s or "") + "=" * (-len(s or "") % 4))
+
+def _app_base(request: Request) -> str:
+    base = os.environ.get("APP_BASE_URL", "").rstrip("/")
+    return base if base else str(request.base_url).rstrip("/")
+
+def _rp_id(request: Request) -> str:
+    return os.environ.get("WEBAUTHN_RP_ID") or (request.url.hostname or "localhost")
+
+def _start_session(db: Session, u: User, resp):
+    token = secrets.token_urlsafe(48)
+    db.add(SessionToken(token=token, user_id=u.id)); db.commit()
+    resp.set_cookie("remora_session", token, httponly=True, samesite="lax", max_age=60*60*24*30)
+    return resp
+
+def _store_flow(db: Session, purpose: str, challenge_value: str, user_id=None) -> str:
+    flow = secrets.token_urlsafe(24)
+    db.add(AuthChallenge(flow_id=flow, purpose=purpose, user_id=user_id, challenge=challenge_value)); db.commit()
+    return flow
+
+def _take_flow(db: Session, flow_id: str, purpose: str):
+    if not flow_id:
+        return None
+    row = db.query(AuthChallenge).filter_by(flow_id=flow_id, purpose=purpose).first()
+    if row:
+        db.delete(row); db.commit()
+    return row
+
+# ----- Google -----
+@app.get("/api/auth/providers")
+def auth_providers():
+    return {"google": bool(os.environ.get("GOOGLE_CLIENT_ID")),
+            "apple": bool(os.environ.get("APPLE_CLIENT_ID")),
+            "passkeys": True}
+
+@app.get("/auth/google/start")
+def google_start(request: Request, db: Session = Depends(get_db)):
+    cid = os.environ.get("GOOGLE_CLIENT_ID")
+    if not cid:
+        raise HTTPException(501, "Google sign-in is not switched on yet")
+    state = secrets.token_urlsafe(24)
+    _store_flow(db, "google", state)
+    params = {"client_id": cid, "redirect_uri": _app_base(request) + "/auth/google/callback",
+              "response_type": "code", "scope": "openid email profile", "state": state,
+              "access_type": "online", "prompt": "select_account"}
+    return RedirectResponse("https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params), status_code=302)
+
+@app.get("/auth/google/callback")
+def google_callback(request: Request, code: str = "", state: str = "", db: Session = Depends(get_db)):
+    row = db.query(AuthChallenge).filter_by(challenge=state, purpose="google").first() if state else None
+    if not row or not code:
+        return RedirectResponse("/?auth_error=google", status_code=302)
+    db.delete(row); db.commit()
+    try:
+        form = urllib.parse.urlencode({"code": code, "client_id": os.environ["GOOGLE_CLIENT_ID"],
+                                       "client_secret": os.environ["GOOGLE_CLIENT_SECRET"],
+                                       "redirect_uri": _app_base(request) + "/auth/google/callback",
+                                       "grant_type": "authorization_code"}).encode()
+        req = _urlreq.Request("https://oauth2.googleapis.com/token", data=form,
+                              headers={"Content-Type": "application/x-www-form-urlencoded"})
+        tok = _json.loads(_urlreq.urlopen(req, timeout=20).read())
+        req2 = _urlreq.Request("https://openidconnect.googleapis.com/v1/userinfo",
+                               headers={"Authorization": "Bearer " + tok["access_token"]})
+        info = _json.loads(_urlreq.urlopen(req2, timeout=20).read())
+    except Exception:
+        return RedirectResponse("/?auth_error=google", status_code=302)
+    email = (info.get("email") or "").strip().lower()
+    if not email or not info.get("email_verified"):
+        return RedirectResponse("/?auth_error=google", status_code=302)
+    u = db.query(User).filter_by(email=email).first()
+    if not u:
+        u = User(name=info.get("name") or email.split("@")[0], email=email, password_hash=None,
+                 auth_provider="google", provider_sub=info.get("sub"), plan="free")
+        db.add(u); db.commit(); db.refresh(u)
+        queue_email(db, u, "welcome")
+        queue_email(db, u, "next_steps")
+    elif not u.provider_sub:
+        u.provider_sub = info.get("sub"); db.commit()
+    return _start_session(db, u, RedirectResponse("/", status_code=302))
+
+# ----- Apple (activates when the Apple Developer credentials are set) -----
+@app.get("/auth/apple/start")
+def apple_start(request: Request, db: Session = Depends(get_db)):
+    cid = os.environ.get("APPLE_CLIENT_ID")
+    if not cid:
+        raise HTTPException(501, "Apple sign-in is not switched on yet — it needs the Apple Developer setup first")
+    state = secrets.token_urlsafe(24)
+    _store_flow(db, "apple", state)
+    params = {"client_id": cid, "redirect_uri": _app_base(request) + "/auth/apple/callback",
+              "response_type": "code", "scope": "name email", "response_mode": "form_post", "state": state}
+    return RedirectResponse("https://appleid.apple.com/auth/authorize?" + urllib.parse.urlencode(params), status_code=302)
+
+# ----- Passkeys (WebAuthn — Face ID, Touch ID, Android, Windows Hello) -----
+from webauthn import (generate_registration_options, verify_registration_response,
+                      generate_authentication_options, verify_authentication_response, options_to_json)
+from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
+from webauthn.helpers.structs import (AuthenticatorSelectionCriteria, ResidentKeyRequirement,
+                                      UserVerificationRequirement, PublicKeyCredentialDescriptor)
+
+@app.post("/api/passkeys/register/options")
+def passkey_register_options(request: Request, db: Session = Depends(get_db), user: User = Depends(require_user)):
+    existing = db.query(PasskeyCredential).filter_by(user_id=user.id).all()
+    opts = generate_registration_options(
+        rp_id=_rp_id(request), rp_name="Viavios",
+        user_id=str(user.id).encode(), user_name=user.email, user_display_name=user.name,
+        authenticator_selection=AuthenticatorSelectionCriteria(
+            resident_key=ResidentKeyRequirement.PREFERRED,
+            user_verification=UserVerificationRequirement.PREFERRED),
+        exclude_credentials=[PublicKeyCredentialDescriptor(id=base64url_to_bytes(c.credential_id)) for c in existing])
+    flow = _store_flow(db, "passkey_register", bytes_to_base64url(opts.challenge), user_id=user.id)
+    resp = JSONResponse(_json.loads(options_to_json(opts)))
+    resp.set_cookie("wa_flow", flow, httponly=True, samesite="lax", max_age=300)
+    return resp
+
+@app.post("/api/passkeys/register/verify")
+async def passkey_register_verify(request: Request, db: Session = Depends(get_db), user: User = Depends(require_user)):
+    body = await request.json()
+    row = _take_flow(db, request.cookies.get("wa_flow"), "passkey_register")
+    if not row or row.user_id != user.id:
+        raise HTTPException(400, "Passkey setup expired — please try again")
+    try:
+        verified = verify_registration_response(
+            credential=body, expected_challenge=base64url_to_bytes(row.challenge),
+            expected_origin=_app_base(request), expected_rp_id=_rp_id(request))
+    except Exception as e:
+        raise HTTPException(400, f"That passkey could not be verified ({str(e)[:120]})")
+    transports = body.get("response", {}).get("transports") or []
+    db.add(PasskeyCredential(user_id=user.id, credential_id=bytes_to_base64url(verified.credential_id),
+                             public_key=bytes_to_base64url(verified.credential_public_key),
+                             sign_count=verified.sign_count, transports=",".join(transports)))
+    db.commit()
+    return {"ok": True}
+
+@app.post("/api/passkeys/login/options")
+def passkey_login_options(request: Request, db: Session = Depends(get_db)):
+    opts = generate_authentication_options(rp_id=_rp_id(request),
+                                           user_verification=UserVerificationRequirement.PREFERRED)
+    flow = _store_flow(db, "passkey_login", bytes_to_base64url(opts.challenge))
+    resp = JSONResponse(_json.loads(options_to_json(opts)))
+    resp.set_cookie("wa_flow", flow, httponly=True, samesite="lax", max_age=300)
+    return resp
+
+@app.post("/api/passkeys/login/verify")
+async def passkey_login_verify(request: Request, db: Session = Depends(get_db)):
+    body = await request.json()
+    row = _take_flow(db, request.cookies.get("wa_flow"), "passkey_login")
+    if not row:
+        raise HTTPException(400, "Passkey sign-in expired — please try again")
+    cred = db.query(PasskeyCredential).filter_by(credential_id=body.get("id") or "").first()
+    if not cred:
+        raise HTTPException(400, "That passkey is not registered here — sign in another way first, then add it in your Account page")
+    user = db.query(User).filter_by(id=cred.user_id).first()
+    try:
+        verified = verify_authentication_response(
+            credential=body, expected_challenge=base64url_to_bytes(row.challenge),
+            expected_origin=_app_base(request), expected_rp_id=_rp_id(request),
+            credential_public_key=base64url_to_bytes(cred.public_key),
+            credential_current_sign_count=cred.sign_count)
+    except Exception as e:
+        raise HTTPException(400, f"That passkey could not be verified ({str(e)[:120]})")
+    cred.sign_count = verified.new_sign_count; db.commit()
+    return set_session(db, user)
+
+@app.get("/api/me/passkeys")
+def my_passkeys(db: Session = Depends(get_db), user: User = Depends(require_user)):
+    rows = db.query(PasskeyCredential).filter_by(user_id=user.id).order_by(PasskeyCredential.created_at.desc()).all()
+    return [{"id": r.id, "created_at": r.created_at.isoformat() if r.created_at else None} for r in rows]
+
+@app.delete("/api/me/passkeys/{pid}")
+def delete_passkey(pid: int, db: Session = Depends(get_db), user: User = Depends(require_user)):
+    row = db.query(PasskeyCredential).filter_by(id=pid, user_id=user.id).first()
+    if not row:
+        raise HTTPException(404, "Passkey not found")
+    db.delete(row); db.commit()
+    return {"ok": True}
 
 # ---------- Books ----------
 @app.get("/api/books")
