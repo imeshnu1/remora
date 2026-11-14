@@ -504,7 +504,13 @@ window.runGrammar = async cid => {
   const box = document.getElementById('gram-'+cid); if (!ta || !box) return;
   box.innerHTML = '<p class="muted">Checking… (your text is sent to the grammar checker only because you clicked — nothing is stored.)</p>';
   try {
-    const out = await api('/api/grammar/check', {method:'POST', body: JSON.stringify({text: ta.value})});
+    // The check runs from the writer's own browser to LanguageTool: their
+    // free API refuses datacenter servers, home browsers are welcome.
+    const form = new URLSearchParams({text: ta.value.slice(0, 20000), language: 'en-US'});
+    const resp = await fetch('https://api.languagetool.org/v2/check', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: form});
+    if (!resp.ok) throw new Error('The grammar checker is busy right now — your writing is saved; try again in a moment.');
+    const raw = await resp.json();
+    const out = {matches: (raw.matches || []).slice(0, 60).map(mt => ({message: mt.message || '', offset: mt.offset || 0, length: mt.length || 0, replacements: (mt.replacements || []).slice(0, 5).map(x => x.value || '')}))};
     if (!out.matches.length) { box.innerHTML = '<p class="muted">✓ Nothing flagged. Clean writing.</p>'; return; }
     box.innerHTML = '<div class="sugg"><strong>Grammar &amp; spelling</strong>' + out.matches.slice(0,20).map((m,i)=>{
       const bad = ta.value.substr(m.offset, m.length);
