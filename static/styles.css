@@ -1,0 +1,2 @@
+.checkrow{display:flex;gap:8px;align-items:flex-start;font-size:14.5px;text-align:left;margin:10px 0}
+.checkrow input{width:auto;margin-top:3px;flex:none}

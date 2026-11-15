@@ -72,6 +72,7 @@ async function openAuthModal(tab='signup'){
       <label>Your name<input id="am-su-name"></label>
       <label>Email<input id="am-su-email" type="email"></label>
       <label>Password (6+ characters)<input id="am-su-pass" type="password"></label>
+      <label class="checkrow"><input type="checkbox" id="am-su-terms"> I agree to the <a href="/terms" target="_blank" rel="noopener">Terms of Use</a> and <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a></label>
       <button class="primary wide" id="am-su-btn">Create my account</button></div>
     <div id="am-si" ${tab!=='signin'?'hidden':''}>
       <label>Email<input id="am-si-email" type="email"></label>
@@ -96,11 +97,11 @@ async function openAuthModal(tab='signup'){
   document.getElementById('am-tab-su').onclick = ()=> setTab('signup');
   document.getElementById('am-tab-si').onclick = ()=> setTab('signin');
   document.getElementById('am-su-btn').onclick = async ()=>{
-    try { me = await api('/api/signup',{method:'POST',body:JSON.stringify({name:val('am-su-name'),email:val('am-su-email'),password:val('am-su-pass')})}); closeAuthModal(); renderUserbox(); showMyBooks(); }
+    try { if (!document.getElementById('am-su-terms').checked) throw new Error('Please tick the box to agree to the Terms of Use and Privacy Policy'); me = await api('/api/signup',{method:'POST',body:JSON.stringify({name:val('am-su-name'),email:val('am-su-email'),password:val('am-su-pass'),accept_terms:true})}); closeAuthModal(); renderUserbox(); showMyBooks(); }
     catch(e){ errBox('am-err', e.message); }
   };
   document.getElementById('am-si-btn').onclick = async ()=>{
-    try { me = await api('/api/signin',{method:'POST',body:JSON.stringify({email:val('am-si-email'),password:val('am-si-pass')})}); closeAuthModal(); renderUserbox(); showMyBooks(); }
+    try { me = await api('/api/signin',{method:'POST',body:JSON.stringify({email:val('am-si-email'),password:val('am-si-pass')})}); closeAuthModal(); renderUserbox(); if (!maybeTermsGate()) showMyBooks(); }
     catch(e){ errBox('am-err', e.message); }
   };
   const off = (id, msg) => { const b = document.getElementById(id); if (b) b.onclick = ()=> errBox('am-err', msg); };
@@ -704,7 +705,24 @@ window.showAccount = showAccount;
 window.delPasskey = async id => { if (!confirm('Remove this passkey?')) return; try { await api('/api/me/passkeys/'+id, {method:'DELETE'}); showAccount(); } catch(e){ alert(e.message); } };
 window.showMyBooks = showMyBooks; window.showDiscover = showDiscover; window.showPricing = showPricing;
 
-(async ()=>{ try { const m = await api('/api/me'); me = (m && m.id) ? m : null; } catch(e){ me=null; } renderUserbox(); route('mybooks');
+function maybeTermsGate(){
+  if (!me || me.terms_accepted) return false;
+  if (document.getElementById('terms-gate')) return true;
+  const overlay = document.createElement('div'); overlay.id = 'terms-gate'; overlay.className = 'modal-overlay';
+  overlay.innerHTML = `<div class="modal card"><h2>One quick agreement</h2>
+    <p>Before you continue, please review and accept our <a href="/terms" target="_blank" rel="noopener">Terms of Use</a> and <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a>. Your story stays yours — the terms say exactly that.</p>
+    <div id="tg-err"></div>
+    <label class="checkrow"><input type="checkbox" id="tg-check"> I agree to the Terms of Use and Privacy Policy</label>
+    <button class="primary wide" id="tg-btn">I agree — continue</button></div>`;
+  document.body.appendChild(overlay);
+  document.getElementById('tg-btn').onclick = async ()=>{
+    if (!document.getElementById('tg-check').checked) { errBox('tg-err', 'Please tick the box to agree'); return; }
+    try { me = await api('/api/me/accept-terms', {method:'POST', body:'{}'}); overlay.remove(); showMyBooks(); }
+    catch(e){ errBox('tg-err', e.message); }
+  };
+  return true;
+}
+(async ()=>{ try { const m = await api('/api/me'); me = (m && m.id) ? m : null; } catch(e){ me=null; } renderUserbox(); if (!maybeTermsGate()) route('mybooks');
   const paid = new URLSearchParams(location.search).get('paid');
   if (paid !== null) { history.replaceState({}, '', location.pathname);
     const note = document.createElement('div'); note.className = 'card'; note.style.marginTop = '14px';

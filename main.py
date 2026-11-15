@@ -34,6 +34,7 @@ FREE_BOOK_LIMIT = 1
 # ---------- Tokens: the app's credits (the "price → token" note) ----------
 # All token economics live here so they can be retuned in one place.
 WELCOME_TOKENS = 50        # free grant when an account is created
+TERMS_VERSION = "2026-11-14"  # clickwrap version recorded at acceptance
 AI_SUGGEST_COST = 5        # tokens charged per AI suggestion
 TOKEN_PACKS = [
     {"id": "tokens_100", "name": "100 tokens", "price": "$5", "tokens": 100,
@@ -54,6 +55,8 @@ class User(Base):
     provider_sub = Column(String(255), nullable=True)
     plan = Column(String(40), default="free", nullable=False)
     token_balance = Column(Integer, default=WELCOME_TOKENS)
+    terms_version = Column(String(40))
+    terms_accepted_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class StripeEvent(Base):
@@ -187,7 +190,9 @@ def _ensure_columns():
         "media": [("url", "VARCHAR(500)")],
         "users": [("auth_provider", "VARCHAR(20) DEFAULT 'password'"),
                   ("provider_sub", "VARCHAR(255)"),
-                  ("token_balance", "INTEGER DEFAULT 50")],
+                  ("token_balance", "INTEGER DEFAULT 50"),
+                  ("terms_version", "VARCHAR(40)"),
+                  ("terms_accepted_at", "TIMESTAMP")],
     }
     from sqlalchemy import inspect as sa_inspect, text as sa_text
     insp = sa_inspect(engine)
@@ -242,7 +247,9 @@ def require_user(request: Request, db: Session = Depends(get_db)):
 
 def user_json(u: User):
     return {"id": u.id, "name": u.name, "email": u.email, "plan": u.plan, "is_paid": u.plan in PAID_PLANS,
-            "tokens": u.token_balance if u.token_balance is not None else WELCOME_TOKENS}
+            "tokens": u.token_balance if u.token_balance is not None else WELCOME_TOKENS,
+            "terms_accepted": bool(getattr(u, "terms_accepted_at", None)),
+            "terms_version": getattr(u, "terms_version", None)}
 
 
 def move_tokens(db: Session, user: User, delta: int, reason: str):
@@ -313,9 +320,12 @@ async def signup(request: Request, db: Session = Depends(get_db)):
     password = data.get("password") or ""
     if not name or not email or len(password) < 6:
         raise HTTPException(400, "Name, email and a password of 6+ characters are required")
+    if data.get("accept_terms") is not True:
+        raise HTTPException(400, "Please agree to the Terms of Use and Privacy Policy to create your account")
     if db.query(User).filter_by(email=email).first():
         raise HTTPException(400, "An account with that email already exists")
-    u = User(name=name, email=email, password_hash=hash_password(password), plan="free")
+    u = User(name=name, email=email, password_hash=hash_password(password), plan="free",
+             terms_version=TERMS_VERSION, terms_accepted_at=datetime.utcnow())
     db.add(u); db.commit(); db.refresh(u)
     db.add(TokenLedger(user_id=u.id, delta=WELCOME_TOKENS, reason="welcome")); db.commit()
     queue_email(db, u, "welcome")
@@ -1209,9 +1219,24 @@ def index():
     return FileResponse(BASE_DIR / "static" / "index.html")
 
 
+@app.post("/api/me/accept-terms")
+def accept_terms(db: Session = Depends(get_db), user: User = Depends(require_user)):
+    """Clickwrap acceptance for accounts created via Google/Apple/passkeys,
+    and for future terms versions. Records the version + timestamp."""
+    user.terms_version = TERMS_VERSION
+    user.terms_accepted_at = datetime.utcnow()
+    db.commit()
+    return user_json(user)
+
+
 @app.get("/privacy")
 def privacy():
     return FileResponse(BASE_DIR / "static" / "privacy.html")
+
+
+@app.get("/terms")
+def terms():
+    return FileResponse(BASE_DIR / "static" / "terms.html")
 
 @app.get("/health")
 def health():
