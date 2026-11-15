@@ -83,6 +83,23 @@ async function openAuthModal(tab='signup'){
     ${providers.apple ? '<a class="oauth-btn" href="/auth/apple/start">Continue with Apple</a>' : '<button class="oauth-btn" id="am-apple-off">Continue with Apple</button>'}
     <button class="oauth-btn" id="am-passkey">Sign in with a passkey</button>
     <p class="muted" style="text-align:center">A passkey uses your face, fingerprint, or screen lock — no password to remember.</p>
+    <button class="oauth-btn" id="am-phone-btn">Continue with phone number</button>
+    <div id="am-phone" hidden>
+      <div id="am-ph-step1">
+        <label>Mobile number<input id="am-ph-num" type="tel" placeholder="(555) 123-4567" autocomplete="tel"></label>
+        <button class="primary wide" id="am-ph-send">Text me a code</button>
+        <p class="muted" style="text-align:center">We text you a 6-digit code — it proves the number is really yours.</p>
+      </div>
+      <div id="am-ph-step2" hidden>
+        <p class="muted" id="am-ph-note" style="text-align:center"></p>
+        <label>6-digit code<input id="am-ph-code" inputmode="numeric" autocomplete="one-time-code"></label>
+        <div id="am-ph-profile" hidden>
+          <label>Your name<input id="am-ph-name"></label>
+          <label class="checkrow"><input type="checkbox" id="am-ph-terms"> I agree to the <a href="/terms" target="_blank" rel="noopener">Terms of Use</a> and <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a></label>
+        </div>
+        <button class="primary wide" id="am-ph-verify">Verify &amp; continue</button>
+      </div>
+    </div>
   </div>`;
   document.body.appendChild(overlay);
   overlay.addEventListener('click', e => { if (e.target === overlay) closeAuthModal(); });
@@ -110,6 +127,32 @@ async function openAuthModal(tab='signup'){
   document.getElementById('am-passkey').onclick = async ()=>{
     try { await passkeyLogin(); }
     catch(e){ errBox('am-err', e.message || 'That passkey sign-in was cancelled.'); }
+  };
+  let phoneFlow = null;
+  document.getElementById('am-phone-btn').onclick = ()=>{
+    const p = document.getElementById('am-phone'); p.hidden = !p.hidden;
+    if (!p.hidden) document.getElementById('am-ph-num').focus();
+  };
+  document.getElementById('am-ph-send').onclick = async ()=>{
+    try { const r = await api('/api/auth/phone/start',{method:'POST',body:JSON.stringify({phone:val('am-ph-num')})});
+      document.getElementById('am-ph-step1').hidden = true;
+      document.getElementById('am-ph-step2').hidden = false;
+      document.getElementById('am-ph-note').textContent = r.demo_code ? ('Demo mode — no texting service connected yet. Your code is ' + r.demo_code) : 'We texted a 6-digit code to your number.';
+      document.getElementById('am-ph-code').focus();
+    } catch(e){ errBox('am-err', e.message); }
+  };
+  document.getElementById('am-ph-verify').onclick = async ()=>{
+    try {
+      if (phoneFlow) {
+        if (!document.getElementById('am-ph-terms').checked) throw new Error('Please tick the box to agree to the Terms of Use and Privacy Policy');
+        me = await api('/api/auth/phone/complete',{method:'POST',body:JSON.stringify({flow:phoneFlow,name:val('am-ph-name'),accept_terms:true})});
+      } else {
+        const r = await api('/api/auth/phone/verify',{method:'POST',body:JSON.stringify({phone:val('am-ph-num'),code:val('am-ph-code')})});
+        if (r.needs_profile) { phoneFlow = r.flow; document.getElementById('am-ph-profile').hidden = false; document.getElementById('am-ph-note').textContent = 'Number verified. One last step — your name and the agreement.'; document.getElementById('am-ph-name').focus(); return; }
+        me = r;
+      }
+      closeAuthModal(); renderUserbox(); if (!maybeTermsGate()) showMyBooks();
+    } catch(e){ errBox('am-err', e.message); }
   };
 }
 async function passkeyLogin(){
@@ -660,6 +703,8 @@ async function showAccount(){
     <p>Sign in with your face, fingerprint, or screen lock — no password to remember. Passkeys live on your phone or computer (Apple, Android, Windows) and sync with your account there.</p>
     <div id="ac-passkeys"><p class="muted">Loading…</p></div>
     <button class="primary" id="ac-add-passkey">Add a passkey on this device</button></div>
+  <div class="card" style="margin-top:18px"><h3>Phone number</h3><div id="ac-phone"><p class="muted">Loading…</p></div>
+    <p class="muted">A verified phone number proves your account belongs to a real person — and lets you sign in with a texted code, no password needed.</p></div>
   <div class="card" style="margin-top:18px"><h3>Emails we've sent you</h3><div id="ac-emails"><p class="muted">Loading…</p></div>
     <p class="muted">“Stored” means the email was created and kept safely in your account history; once a sending service is connected, these arrive in your inbox as well.</p></div>
   <div class="card" style="margin-top:18px"><h3>Close account</h3>
@@ -686,6 +731,27 @@ async function showAccount(){
   try {
     const tk = await api('/api/me/tokens');
     const REASONS = {welcome:'Welcome grant', ai_suggest:'AI suggestion', token_pack:'Token pack', plan_grant:'Plan grant'};
+    const ph = document.getElementById('ac-phone');
+    if (ph) {
+      if (me.phone_verified) ph.innerHTML = `<p>✓ <strong>Verified:</strong> ${esc(me.phone||'')}</p>`;
+      else ph.innerHTML = `<label>Mobile number<input id="ac-ph-num" type="tel" placeholder="(555) 123-4567"></label>
+        <button class="primary" id="ac-ph-send">Text me a code</button>
+        <div id="ac-ph-step2" hidden><p class="muted" id="ac-ph-note"></p>
+        <label>6-digit code<input id="ac-ph-code" inputmode="numeric"></label>
+        <button class="primary" id="ac-ph-verify">Verify my number</button></div>`;
+      const sendBtn = document.getElementById('ac-ph-send');
+      if (sendBtn) sendBtn.onclick = async ()=>{
+        try { const r = await api('/api/auth/phone/start',{method:'POST',body:JSON.stringify({phone:val('ac-ph-num')})});
+          document.getElementById('ac-ph-step2').hidden = false;
+          document.getElementById('ac-ph-note').textContent = r.demo_code ? ('Demo mode — your code is ' + r.demo_code) : 'We texted a 6-digit code to your number.';
+        } catch(e){ errBox('accerr', e.message); }
+      };
+      const verBtn = document.getElementById('ac-ph-verify');
+      if (verBtn) verBtn.onclick = async ()=>{
+        try { me = await api('/api/auth/phone/verify',{method:'POST',body:JSON.stringify({phone:val('ac-ph-num'),code:val('ac-ph-code')})}); showAccount(); }
+        catch(e){ errBox('accerr', e.message); }
+      };
+    }
     document.getElementById('ac-tokens').innerHTML = `<p style="font-size:22px"><strong>${tk.balance}</strong> tokens</p>` + (tk.ledger.length ? `<ul>${tk.ledger.slice(0,10).map(r=>`<li>${r.delta>0?'+':''}${r.delta} — ${esc(REASONS[r.reason]||r.reason)} <span class="muted">(${esc((r.created_at||'').slice(0,10))})</span></li>`).join('')}</ul>` : '<p class="muted">No token activity yet.</p>');
   } catch(e){ document.getElementById('ac-tokens').innerHTML = '<p class="muted">Could not load tokens.</p>'; }
   try {

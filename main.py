@@ -57,6 +57,8 @@ class User(Base):
     token_balance = Column(Integer, default=WELCOME_TOKENS)
     terms_version = Column(String(40))
     terms_accepted_at = Column(DateTime)
+    phone = Column(String(30))
+    phone_verified = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class StripeEvent(Base):
@@ -192,7 +194,9 @@ def _ensure_columns():
                   ("provider_sub", "VARCHAR(255)"),
                   ("token_balance", "INTEGER DEFAULT 50"),
                   ("terms_version", "VARCHAR(40)"),
-                  ("terms_accepted_at", "TIMESTAMP")],
+                  ("terms_accepted_at", "TIMESTAMP"),
+                  ("phone", "VARCHAR(30)"),
+                  ("phone_verified", "BOOLEAN DEFAULT FALSE")],
     }
     from sqlalchemy import inspect as sa_inspect, text as sa_text
     insp = sa_inspect(engine)
@@ -246,10 +250,14 @@ def require_user(request: Request, db: Session = Depends(get_db)):
     return u
 
 def user_json(u: User):
-    return {"id": u.id, "name": u.name, "email": u.email, "plan": u.plan, "is_paid": u.plan in PAID_PLANS,
+    return {"id": u.id, "name": u.name,
+            "email": None if (u.email or "").endswith("@phone.viavios.local") else u.email,
+            "plan": u.plan, "is_paid": u.plan in PAID_PLANS,
             "tokens": u.token_balance if u.token_balance is not None else WELCOME_TOKENS,
             "terms_accepted": bool(getattr(u, "terms_accepted_at", None)),
-            "terms_version": getattr(u, "terms_version", None)}
+            "terms_version": getattr(u, "terms_version", None),
+            "phone": getattr(u, "phone", None),
+            "phone_verified": bool(getattr(u, "phone_verified", False))}
 
 
 def move_tokens(db: Session, user: User, delta: int, reason: str):
@@ -470,7 +478,7 @@ def _take_flow(db: Session, flow_id: str, purpose: str):
 def auth_providers():
     return {"google": bool(os.environ.get("GOOGLE_CLIENT_ID")),
             "apple": bool(os.environ.get("APPLE_CLIENT_ID")),
-            "passkeys": True}
+            "passkeys": True, "phone": True}
 
 @app.get("/auth/google/start")
 def google_start(request: Request, db: Session = Depends(get_db)):
@@ -637,6 +645,129 @@ async def apple_callback(request: Request, db: Session = Depends(get_db)):
             pass  # keep the original provider label; sub is linked for next time
         db.commit()
     return _start_session(db, u, RedirectResponse("/", status_code=302))
+
+# ----- Phone number + one-time code (OTP) -----
+# Sign in (or sign up) with a phone number: we text a 6-digit code; entering it
+# proves the person controls a real phone. SMS goes out through Twilio when
+# TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM_NUMBER are set; until
+# then the app runs in demo mode and shows the code on screen (same pattern as
+# the email system before a sender was connected).
+OTP_TTL_SECONDS = 600
+OTP_MAX_ATTEMPTS = 5
+
+
+def _normalize_phone(raw: str) -> str:
+    digits = "".join(c for c in (raw or "") if c.isdigit())
+    if len(digits) == 10:
+        digits = "1" + digits
+    if not (10 <= len(digits) <= 15):
+        raise HTTPException(400, "Enter a valid phone number, with country code if outside the US")
+    return "+" + digits
+
+
+def _send_sms(phone: str, text: str) -> bool:
+    sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
+    tok = os.environ.get("TWILIO_AUTH_TOKEN", "")
+    frm = os.environ.get("TWILIO_FROM_NUMBER", "")
+    if not (sid and tok and frm):
+        return False
+    import urllib.request as _u
+    try:
+        req = _u.Request(f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json",
+                         data=urllib.parse.urlencode({"To": phone, "From": frm, "Body": text}).encode(),
+                         headers={"Authorization": "Basic " + base64.b64encode(f"{sid}:{tok}".encode()).decode(),
+                                  "Content-Type": "application/x-www-form-urlencoded"})
+        with _u.urlopen(req, timeout=20) as r:
+            return r.status in (200, 201)
+    except Exception:
+        return False
+
+
+@app.post("/api/auth/phone/start")
+async def phone_start(request: Request, db: Session = Depends(get_db)):
+    data = await request.json()
+    phone = _normalize_phone(data.get("phone") or "")
+    for old in db.query(AuthChallenge).filter_by(purpose="phone_otp").all():
+        if old.challenge.split("|")[0] == phone:
+            db.delete(old)
+    db.commit()
+    code = f"{secrets.randbelow(1000000):06d}"
+    digest = hashlib.sha256(code.encode()).hexdigest()
+    expires = int(time.time()) + OTP_TTL_SECONDS
+    db.add(AuthChallenge(flow_id=secrets.token_urlsafe(24), purpose="phone_otp",
+                         challenge=f"{phone}|{digest}|0|{expires}"))
+    db.commit()
+    sent = _send_sms(phone, f"Your Viavios code is {code}. It expires in 10 minutes.")
+    return {"sent": True, "sms": sent, "demo_code": None if sent else code}
+
+
+def _check_otp(db: Session, phone: str, code: str):
+    """Validate a code; returns True or raises. Consumes the challenge on success."""
+    row = None
+    for r in db.query(AuthChallenge).filter_by(purpose="phone_otp").all():
+        if r.challenge.split("|")[0] == phone:
+            row = r
+    if not row:
+        raise HTTPException(400, "No code is waiting for that number — request a new one")
+    parts = row.challenge.split("|")
+    digest, attempts, expires = parts[1], int(parts[2]), int(parts[3])
+    if int(time.time()) > expires:
+        db.delete(row); db.commit()
+        raise HTTPException(400, "That code has expired — request a new one")
+    if not hmac.compare_digest(hashlib.sha256((code or "").strip().encode()).hexdigest(), digest):
+        attempts += 1
+        if attempts >= OTP_MAX_ATTEMPTS:
+            db.delete(row); db.commit()
+            raise HTTPException(400, "Too many wrong tries — request a new code")
+        row.challenge = f"{phone}|{digest}|{attempts}|{expires}"; db.commit()
+        raise HTTPException(401, "That code doesn't match — check and try again")
+    db.delete(row); db.commit()
+    return True
+
+
+@app.post("/api/auth/phone/verify")
+async def phone_verify(request: Request, db: Session = Depends(get_db)):
+    data = await request.json()
+    phone = _normalize_phone(data.get("phone") or "")
+    _check_otp(db, phone, data.get("code") or "")
+    # Signed-in user linking a phone to their account?
+    me_user = current_user(request, db)
+    owner = db.query(User).filter_by(phone=phone).first()
+    if me_user:
+        if owner and owner.id != me_user.id:
+            raise HTTPException(400, "That number already belongs to another account")
+        me_user.phone = phone; me_user.phone_verified = True; db.commit()
+        return user_json(me_user)
+    if owner and owner.phone_verified:
+        return set_session(db, owner)
+    flow = _store_flow(db, "phone_verified", phone)
+    return {"needs_profile": True, "flow": flow}
+
+
+@app.post("/api/auth/phone/complete")
+async def phone_complete(request: Request, db: Session = Depends(get_db)):
+    data = await request.json()
+    row = db.query(AuthChallenge).filter_by(flow_id=data.get("flow") or "", purpose="phone_verified").first()
+    if not row or (datetime.utcnow() - row.created_at).total_seconds() > 1800:
+        raise HTTPException(400, "That verification has expired — start again")
+    phone = row.challenge
+    name = (data.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "Your name is required")
+    if data.get("accept_terms") is not True:
+        raise HTTPException(400, "Please agree to the Terms of Use and Privacy Policy to create your account")
+    if db.query(User).filter_by(phone=phone).first():
+        raise HTTPException(400, "An account with that number already exists — sign in instead")
+    db.delete(row); db.commit()
+    u = User(name=name, email=f"{phone.replace('+', '')}@phone.viavios.local", password_hash=None,
+             auth_provider="phone", plan="free", phone=phone, phone_verified=True,
+             terms_version=TERMS_VERSION, terms_accepted_at=datetime.utcnow())
+    db.add(u); db.commit(); db.refresh(u)
+    db.add(TokenLedger(user_id=u.id, delta=WELCOME_TOKENS, reason="welcome")); db.commit()
+    queue_email(db, u, "welcome")
+    queue_email(db, u, "next_steps")
+    return set_session(db, u)
+
 
 # ----- Passkeys (WebAuthn — Face ID, Touch ID, Android, Windows Hello) -----
 from webauthn import (generate_registration_options, verify_registration_response,
