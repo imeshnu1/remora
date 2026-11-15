@@ -369,7 +369,7 @@ async function openEditor(id){
       <div class="toolrow">
         <button class="ghost" onclick="toggleDictate(${c.id}, this)">🎙 Dictate</button>
         <button class="ghost" onclick="runGrammar(${c.id})">✓ Check grammar</button>
-        <button class="ghost" onclick="runAI(${c.id})">✨ AI idea</button>
+        <button class="ghost" onclick="runAI(${c.id})">✨ AI idea · 5 tokens</button>
         <button class="ghost" onclick="document.getElementById('cpf-${c.id}').click()">🖼 Photo in chapter</button>
         <input type="file" id="cpf-${c.id}" accept="image/*" style="display:none" onchange="insertChapterPhoto(${c.id}, ${id}, this)">
       </div>
@@ -382,7 +382,7 @@ async function openEditor(id){
     <div class="toolrow">
       <button class="ghost" onclick="toggleDictate('nc', this)">🎙 Dictate</button>
       <button class="ghost" onclick="runGrammar('nc')">✓ Check grammar</button>
-      <button class="ghost" onclick="runAI('nc')">✨ AI idea</button>
+      <button class="ghost" onclick="runAI('nc')">✨ AI idea · 5 tokens</button>
     </div>
     <div id="ai-nc"></div><div id="gram-nc"></div>
     <button class="primary" id="nc-btn">Add chapter as draft</button></div>
@@ -531,7 +531,7 @@ window.runAI = async cid => {
   const box = document.getElementById('ai-'+cid); if (!ta || !box) return;
   box.innerHTML = '<p class="muted">Thinking…</p>';
   try { const out = await api('/api/ai/suggest', {method:'POST', body: JSON.stringify({text: ta.value.slice(-3000)})});
-    box.innerHTML = `<div class="sugg"><strong>✨ Suggestion</strong><p>${esc(out.suggestion)}</p><p class="muted">Your words stay yours — this passage was sent only because you clicked, and nothing from it is stored.</p></div>`;
+    box.innerHTML = `<div class="sugg"><strong>✨ Suggestion</strong><p>${esc(out.suggestion)}</p><p class="muted">${out.tokens_charged ? `Cost ${out.tokens_charged} tokens — balance now ${out.balance}. ` : ''}Your words stay yours — this passage was sent only because you clicked, and nothing from it is stored.</p></div>`;
   } catch(e){ box.innerHTML = `<div class="sugg"><p>${esc(e.message)}</p></div>`; }
 };
 
@@ -629,9 +629,15 @@ async function showPricing(){
   app.innerHTML = `<h1>Pricing</h1><div id="prerr"></div><p class="muted">Checkout here is simulated for the prototype — no real payment is taken. Stripe powers real payments at launch.</p>
   <div class="grid">${plans.map(p=>`<div class="card"><h3>${esc(p.name)}</h3><p class="price">${esc(p.price)}</p>
     <ul>${p.features.map(f=>`<li>${esc(f)}</li>`).join('')}</ul>
-    ${me && me.id ? `<button class="primary" onclick="buyPlan('${p.id}')">${me.plan===p.id?'Current plan':'Choose '+esc(p.name)}</button>` : '<p class="muted">Sign in to choose a plan.</p>'}</div>`).join('')}</div>`;
+    ${me && me.id ? `<button class="primary" onclick="buyPlan('${p.id}')">${me.plan===p.id?'Current plan':'Choose '+esc(p.name)}</button>` : '<p class="muted">Sign in to choose a plan.</p>'}</div>`).join('')}</div>
+  <h2 style="margin-top:26px">Writing tokens</h2>
+  <p class="muted">Tokens power the writing helpers — an AI suggestion costs 5 tokens. Every account starts with 50 free. Paid plans include a token grant too.</p>
+  <div class="grid" id="pack-grid"><p class="muted">Loading token packs…</p></div>`;
+  try { const packs = await api('/api/token-packs');
+    document.getElementById('pack-grid').innerHTML = packs.map(p=>`<div class="card"><h3>${esc(p.name)}</h3><p class="price">${esc(p.price)}</p><ul>${p.features.map(f=>`<li>${esc(f)}</li>`).join('')}</ul>${me && me.id ? `<button class="primary" onclick="buyPlan('${p.id}')">Buy ${esc(p.name)}</button>` : '<p class="muted">Sign in to buy tokens.</p>'}</div>`).join('');
+  } catch(e){ document.getElementById('pack-grid').innerHTML = '<p class="muted">Token packs could not load.</p>'; }
 }
-window.buyPlan = async plan => { try { const r = await api('/api/checkout',{method:'POST',body:JSON.stringify({plan})}); me.plan = r.user.plan; renderUserbox(); showPricing(); alert('Simulated checkout complete — plan is now: '+me.plan); } catch(e){ alert(e.message); } };
+window.buyPlan = async plan => { try { const r = await api('/api/checkout',{method:'POST',body:JSON.stringify({plan})}); me.plan = r.user.plan; if (r.user.tokens !== undefined) me.tokens = r.user.tokens; renderUserbox(); showPricing(); alert(r.tokens_granted ? `Simulated checkout complete — ${r.tokens_granted} tokens added. Balance: ${r.user.tokens}` : 'Simulated checkout complete — plan is now: '+me.plan); } catch(e){ alert(e.message); } };
 const EMAIL_KINDS = {welcome:'Welcome', next_steps:'Getting started', payment_receipt:'Payment receipt', account_updated:'Account update', account_cancelled:'Account closed', app_update:'Viavios news'};
 async function showAccount(){
   app.innerHTML = `<h1>Your account</h1><div id="accerr"></div>
@@ -646,6 +652,8 @@ async function showAccount(){
       <label>New password (6+ characters)<input id="ac-new" type="password"></label>
       <button class="primary" id="ac-pass">Change password</button></div>
   </div>
+  <div class="card" style="margin-top:18px"><h3>Writing tokens</h3><div id="ac-tokens"><p class="muted">Loading…</p></div>
+    <p class="muted">Tokens power the writing helpers — an AI suggestion costs 5. Buy more on the Pricing page; paid plans include a grant.</p></div>
   <div class="card" style="margin-top:18px"><h3>Passkeys</h3>
     <p>Sign in with your face, fingerprint, or screen lock — no password to remember. Passkeys live on your phone or computer (Apple, Android, Windows) and sync with your account there.</p>
     <div id="ac-passkeys"><p class="muted">Loading…</p></div>
@@ -673,6 +681,11 @@ async function showAccount(){
     try { await passkeyAdd(); showAccount(); alert('Passkey added. Next time, sign in with the passkey button.'); }
     catch(e){ errBox('accerr', e.message || 'That was cancelled.'); }
   };
+  try {
+    const tk = await api('/api/me/tokens');
+    const REASONS = {welcome:'Welcome grant', ai_suggest:'AI suggestion', token_pack:'Token pack', plan_grant:'Plan grant'};
+    document.getElementById('ac-tokens').innerHTML = `<p style="font-size:22px"><strong>${tk.balance}</strong> tokens</p>` + (tk.ledger.length ? `<ul>${tk.ledger.slice(0,10).map(r=>`<li>${r.delta>0?'+':''}${r.delta} — ${esc(REASONS[r.reason]||r.reason)} <span class="muted">(${esc((r.created_at||'').slice(0,10))})</span></li>`).join('')}</ul>` : '<p class="muted">No token activity yet.</p>');
+  } catch(e){ document.getElementById('ac-tokens').innerHTML = '<p class="muted">Could not load tokens.</p>'; }
   try {
     const pks = await api('/api/me/passkeys');
     document.getElementById('ac-passkeys').innerHTML = pks.length

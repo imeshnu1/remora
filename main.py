@@ -3,7 +3,7 @@ Viavios - memoir / legacy book / chronicle / testament web app.
 FastAPI + SQLAlchemy (SQLite by default, PostgreSQL via DATABASE_URL on AWS).
 Vanilla frontend served from ./static. Passwords: PBKDF2 (stdlib). Sessions: server-side tokens in a cookie.
 """
-import base64, hashlib, hmac, os, secrets, shutil
+import base64, hashlib, hmac, json, os, secrets, shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -31,6 +31,18 @@ Base = declarative_base()
 PAID_PLANS = {"subscription_monthly", "subscription_yearly", "lifetime"}
 FREE_BOOK_LIMIT = 1
 
+# ---------- Tokens: the app's credits (the "price → token" note) ----------
+# All token economics live here so they can be retuned in one place.
+WELCOME_TOKENS = 50        # free grant when an account is created
+AI_SUGGEST_COST = 5        # tokens charged per AI suggestion
+TOKEN_PACKS = [
+    {"id": "tokens_100", "name": "100 tokens", "price": "$5", "tokens": 100,
+     "features": ["100 writing tokens", "Good for 20 AI suggestions"]},
+    {"id": "tokens_300", "name": "300 tokens", "price": "$12", "tokens": 300,
+     "features": ["300 writing tokens", "Good for 60 AI suggestions", "Best value"]},
+]
+PLAN_TOKEN_GRANTS = {"subscription_monthly": 200, "subscription_yearly": 200, "lifetime": 2000}
+
 # ---------- Models ----------
 class User(Base):
     __tablename__ = "users"
@@ -41,7 +53,17 @@ class User(Base):
     auth_provider = Column(String(40), default="password", nullable=False)  # password | google
     provider_sub = Column(String(255), nullable=True)
     plan = Column(String(40), default="free", nullable=False)
+    token_balance = Column(Integer, default=WELCOME_TOKENS)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class TokenLedger(Base):
+    __tablename__ = "token_ledger"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    delta = Column(Integer, nullable=False)  # + grant/purchase, - spend
+    reason = Column(String(40), default="")  # welcome | ai_suggest | token_pack | plan_grant
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 
 class PasskeyCredential(Base):
     __tablename__ = "passkey_credentials"
@@ -157,7 +179,8 @@ def _ensure_columns():
         "books": [("font", "VARCHAR(20) DEFAULT 'serif'")],
         "media": [("url", "VARCHAR(500)")],
         "users": [("auth_provider", "VARCHAR(20) DEFAULT 'password'"),
-                  ("provider_sub", "VARCHAR(255)")],
+                  ("provider_sub", "VARCHAR(255)"),
+                  ("token_balance", "INTEGER DEFAULT 50")],
     }
     from sqlalchemy import inspect as sa_inspect, text as sa_text
     insp = sa_inspect(engine)
@@ -211,7 +234,15 @@ def require_user(request: Request, db: Session = Depends(get_db)):
     return u
 
 def user_json(u: User):
-    return {"id": u.id, "name": u.name, "email": u.email, "plan": u.plan, "is_paid": u.plan in PAID_PLANS}
+    return {"id": u.id, "name": u.name, "email": u.email, "plan": u.plan, "is_paid": u.plan in PAID_PLANS,
+            "tokens": u.token_balance if u.token_balance is not None else WELCOME_TOKENS}
+
+
+def move_tokens(db: Session, user: User, delta: int, reason: str):
+    """Adjust a user's token balance and record it. Caller commits."""
+    bal = user.token_balance if user.token_balance is not None else WELCOME_TOKENS
+    user.token_balance = bal + delta
+    db.add(TokenLedger(user_id=user.id, delta=delta, reason=reason))
 
 def queue_email(db: Session, user, kind: str, to_email: str = None, name: str = None, **ctx):
     """Render, record, and deliver one transactional email. Never raises:
@@ -279,6 +310,7 @@ async def signup(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(400, "An account with that email already exists")
     u = User(name=name, email=email, password_hash=hash_password(password), plan="free")
     db.add(u); db.commit(); db.refresh(u)
+    db.add(TokenLedger(user_id=u.id, delta=WELCOME_TOKENS, reason="welcome")); db.commit()
     queue_email(db, u, "welcome")
     queue_email(db, u, "next_steps")
     return set_session(db, u)
@@ -359,6 +391,7 @@ async def delete_me(request: Request, db: Session = Depends(get_db), user: User 
     db.query(Vote).filter_by(user_id=user.id).delete(synchronize_session=False)
     db.query(SessionToken).filter_by(user_id=user.id).delete(synchronize_session=False)
     db.query(PasskeyCredential).filter_by(user_id=user.id).delete(synchronize_session=False)
+    db.query(TokenLedger).filter_by(user_id=user.id).delete(synchronize_session=False)
     db.query(AuthChallenge).filter_by(user_id=user.id).delete(synchronize_session=False)
     db.query(EmailOutbox).filter_by(user_id=user.id).update({"user_id": None}, synchronize_session=False)
     db.delete(user); db.commit()
@@ -461,6 +494,7 @@ def google_callback(request: Request, code: str = "", state: str = "", db: Sessi
         u = User(name=info.get("name") or email.split("@")[0], email=email, password_hash=None,
                  auth_provider="google", provider_sub=info.get("sub"), plan="free")
         db.add(u); db.commit(); db.refresh(u)
+        db.add(TokenLedger(user_id=u.id, delta=WELCOME_TOKENS, reason="welcome")); db.commit()
         queue_email(db, u, "welcome")
         queue_email(db, u, "next_steps")
     elif not u.provider_sub:
@@ -769,7 +803,7 @@ async def grammar_check(request: Request, user: User = Depends(require_user)):
 
 
 @app.post("/api/ai/suggest")
-async def ai_suggest(request: Request, user: User = Depends(require_user)):
+async def ai_suggest(request: Request, db: Session = Depends(get_db), user: User = Depends(require_user)):
     """AI writing suggestions. Privacy rule: a passage is sent to the AI only
     when the writer clicks for a suggestion, and nothing is stored from it.
     Activates when AI_API_KEY is configured (OpenAI-compatible endpoint)."""
@@ -777,6 +811,9 @@ async def ai_suggest(request: Request, user: User = Depends(require_user)):
     key = os.environ.get("AI_API_KEY", "")
     if not key:
         raise HTTPException(501, "AI suggestions are not switched on yet — they arrive with the AI key. Your words stay private either way: text is only ever sent when you click for a suggestion.")
+    balance = user.token_balance if user.token_balance is not None else WELCOME_TOKENS
+    if balance < AI_SUGGEST_COST:
+        raise HTTPException(402, f"An AI suggestion costs {AI_SUGGEST_COST} tokens and your balance is {balance}. Token packs are on the Pricing page.")
     data = await request.json()
     text = (data.get("text") or "")[:6000]
     if len(text.strip()) < 10:
@@ -791,9 +828,13 @@ async def ai_suggest(request: Request, user: User = Depends(require_user)):
                          headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
         with _u.urlopen(req, timeout=30) as r:
             out = json.loads(r.read().decode())
-        return {"suggestion": out["choices"][0]["message"]["content"].strip()}
+        suggestion = out["choices"][0]["message"]["content"].strip()
     except Exception:
         raise HTTPException(502, "The AI helper is unreachable right now — try again in a moment.")
+    move_tokens(db, user, -AI_SUGGEST_COST, "ai_suggest")
+    db.commit()
+    return {"suggestion": suggestion, "tokens_charged": AI_SUGGEST_COST,
+            "balance": user.token_balance}
 
 
 # ---------- Discover / voting / publishers ----------
@@ -837,15 +878,41 @@ def plans():
 async def checkout(request: Request, db: Session = Depends(get_db), user: User = Depends(require_user)):
     data = await request.json()
     plan = data.get("plan")
+    pack = next((p for p in TOKEN_PACKS if p["id"] == plan), None)
+    if pack:
+        # Token pack: balance grows, plan unchanged. Simulated like the plans.
+        move_tokens(db, user, pack["tokens"], "token_pack")
+        db.commit()
+        queue_email(db, user, "payment_receipt", plan_name=pack["name"], price=pack["price"],
+                    date=datetime.utcnow().strftime("%B %d, %Y"), simulated=True)
+        return {"ok": True, "simulated": True, "tokens_granted": pack["tokens"], "user": user_json(user)}
     if plan not in [p["id"] for p in PLANS]:
         raise HTTPException(400, "Unknown plan")
     # SIMULATED checkout: no real payment is taken. Stripe replaces this endpoint at real launch (see README).
     user.plan = plan
+    grant = PLAN_TOKEN_GRANTS.get(plan, 0)
+    if grant:
+        move_tokens(db, user, grant, "plan_grant")
     db.commit()
     plan_info = next((p for p in PLANS if p["id"] == plan), {"name": plan, "price": ""})
     queue_email(db, user, "payment_receipt", plan_name=plan_info["name"], price=plan_info["price"],
                 date=datetime.utcnow().strftime("%B %d, %Y"), simulated=True)
     return {"ok": True, "simulated": True, "user": user_json(user)}
+
+
+@app.get("/api/token-packs")
+def token_packs():
+    return TOKEN_PACKS
+
+
+@app.get("/api/me/tokens")
+def my_tokens(db: Session = Depends(get_db), user: User = Depends(require_user)):
+    rows = (db.query(TokenLedger).filter_by(user_id=user.id)
+            .order_by(TokenLedger.id.desc()).limit(30).all())
+    return {"balance": user.token_balance if user.token_balance is not None else WELCOME_TOKENS,
+            "ai_suggest_cost": AI_SUGGEST_COST,
+            "ledger": [{"delta": r.delta, "reason": r.reason,
+                        "created_at": r.created_at.isoformat() if r.created_at else None} for r in rows]}
 
 # ---------- PDF export (paid gate) ----------
 @app.get("/api/books/{book_id}/pdf")
