@@ -980,6 +980,11 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 def index():
     return FileResponse(BASE_DIR / "static" / "index.html")
 
+
+@app.get("/privacy")
+def privacy():
+    return FileResponse(BASE_DIR / "static" / "privacy.html")
+
 @app.get("/health")
 def health():
     return {"ok": True, "app": "remora"}
