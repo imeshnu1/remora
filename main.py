@@ -3,7 +3,7 @@ Viavios - memoir / legacy book / chronicle / testament web app.
 FastAPI + SQLAlchemy (SQLite by default, PostgreSQL via DATABASE_URL on AWS).
 Vanilla frontend served from ./static. Passwords: PBKDF2 (stdlib). Sessions: server-side tokens in a cookie.
 """
-import base64, hashlib, hmac, json, os, secrets, shutil
+import base64, hashlib, hmac, json, os, secrets, shutil, time
 from datetime import datetime
 from pathlib import Path
 
@@ -55,6 +55,13 @@ class User(Base):
     plan = Column(String(40), default="free", nullable=False)
     token_balance = Column(Integer, default=WELCOME_TOKENS)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class StripeEvent(Base):
+    __tablename__ = "stripe_events"
+    id = Column(Integer, primary_key=True)
+    event_id = Column(String(255), unique=True, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 
 class TokenLedger(Base):
     __tablename__ = "token_ledger"
@@ -513,6 +520,114 @@ def apple_start(request: Request, db: Session = Depends(get_db)):
               "response_type": "code", "scope": "name email", "response_mode": "form_post", "state": state}
     return RedirectResponse("https://appleid.apple.com/auth/authorize?" + urllib.parse.urlencode(params), status_code=302)
 
+
+def _b64u(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def _b64u_decode(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def _apple_client_secret() -> str:
+    """Apple requires a short-lived ES256 JWT as the OAuth client secret,
+    signed with the .p8 key from the Apple Developer account."""
+    from cryptography.hazmat.primitives import serialization, hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+    pem = os.environ["APPLE_PRIVATE_KEY"].replace("\\n", "\n")
+    key = serialization.load_pem_private_key(pem.encode(), password=None)
+    now = int(time.time())
+    header = {"alg": "ES256", "kid": os.environ["APPLE_KEY_ID"], "typ": "JWT"}
+    payload = {"iss": os.environ["APPLE_TEAM_ID"], "iat": now, "exp": now + 1200,
+               "aud": "https://appleid.apple.com", "sub": os.environ["APPLE_CLIENT_ID"]}
+    signing_input = (_b64u(json.dumps(header, separators=(",", ":")).encode()) + "." +
+                     _b64u(json.dumps(payload, separators=(",", ":")).encode())).encode()
+    der = key.sign(signing_input, ec.ECDSA(hashes.SHA256()))
+    r, s = decode_dss_signature(der)
+    raw = r.to_bytes(32, "big") + s.to_bytes(32, "big")
+    return signing_input.decode() + "." + _b64u(raw)
+
+
+def _verify_apple_id_token(id_token: str, client_id: str) -> dict:
+    """Verify an Apple id_token against Apple's published keys (RS256)."""
+    import urllib.request as _u
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding
+    from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
+    head_b, payload_b, sig_b = id_token.split(".")
+    header = json.loads(_b64u_decode(head_b))
+    jwks_url = os.environ.get("APPLE_JWKS_URL", "https://appleid.apple.com/auth/keys")
+    with _u.urlopen(jwks_url, timeout=15) as resp:
+        jwks = json.loads(resp.read().decode())
+    jwk = next((k for k in jwks.get("keys", []) if k.get("kid") == header.get("kid")), None)
+    if not jwk:
+        raise ValueError("unknown signing key")
+    n = int.from_bytes(_b64u_decode(jwk["n"]), "big")
+    e = int.from_bytes(_b64u_decode(jwk["e"]), "big")
+    pub = RSAPublicNumbers(e, n).public_key()
+    pub.verify(_b64u_decode(sig_b), (head_b + "." + payload_b).encode(),
+               padding.PKCS1v15(), hashes.SHA256())
+    claims = json.loads(_b64u_decode(payload_b))
+    if claims.get("iss") != "https://appleid.apple.com" or claims.get("aud") != client_id:
+        raise ValueError("issuer/audience mismatch")
+    if int(claims.get("exp", 0)) < int(time.time()):
+        raise ValueError("token expired")
+    return claims
+
+
+@app.post("/auth/apple/callback")
+async def apple_callback(request: Request, db: Session = Depends(get_db)):
+    form = await request.form()
+    code, state = form.get("code") or "", form.get("state") or ""
+    row = db.query(AuthChallenge).filter_by(challenge=state, purpose="apple").first() if state else None
+    if not row or not code or form.get("error"):
+        return RedirectResponse("/?auth_error=apple", status_code=302)
+    db.delete(row); db.commit()
+    import urllib.request as _u
+    try:
+        token_url = os.environ.get("APPLE_TOKEN_URL", "https://appleid.apple.com/auth/token")
+        fields = urllib.parse.urlencode({
+            "client_id": os.environ["APPLE_CLIENT_ID"], "client_secret": _apple_client_secret(),
+            "code": code, "grant_type": "authorization_code",
+            "redirect_uri": _app_base(request) + "/auth/apple/callback"})
+        req = _u.Request(token_url, data=fields.encode(),
+                         headers={"Content-Type": "application/x-www-form-urlencoded"})
+        with _u.urlopen(req, timeout=20) as r:
+            tokens = json.loads(r.read().decode())
+        claims = _verify_apple_id_token(tokens["id_token"], os.environ["APPLE_CLIENT_ID"])
+    except Exception:
+        return RedirectResponse("/?auth_error=apple", status_code=302)
+    sub = claims.get("sub") or ""
+    email = (claims.get("email") or "").strip().lower()
+    u = db.query(User).filter_by(auth_provider="apple", provider_sub=sub).first() if sub else None
+    if not u and email:
+        u = db.query(User).filter_by(email=email).first()
+    if not u:
+        name = email.split("@")[0] if email else "Apple user"
+        try:  # Apple sends the name only on the very first consent
+            info = json.loads(form.get("user") or "{}")
+            nm = info.get("name") or {}
+            full = ((nm.get("firstName") or "") + " " + (nm.get("lastName") or "")).strip()
+            if full:
+                name = full
+        except Exception:
+            pass
+        if not email:
+            return RedirectResponse("/?auth_error=apple", status_code=302)
+        u = User(name=name, email=email, password_hash=None,
+                 auth_provider="apple", provider_sub=sub, plan="free")
+        db.add(u); db.commit(); db.refresh(u)
+        db.add(TokenLedger(user_id=u.id, delta=WELCOME_TOKENS, reason="welcome")); db.commit()
+        queue_email(db, u, "welcome")
+        queue_email(db, u, "next_steps")
+    elif not u.provider_sub and sub:
+        u.provider_sub = sub
+        if not u.auth_provider or u.auth_provider == "password":
+            pass  # keep the original provider label; sub is linked for next time
+        db.commit()
+    return _start_session(db, u, RedirectResponse("/", status_code=302))
+
 # ----- Passkeys (WebAuthn — Face ID, Touch ID, Android, Windows Hello) -----
 from webauthn import (generate_registration_options, verify_registration_response,
                       generate_authentication_options, verify_authentication_response, options_to_json)
@@ -879,6 +994,10 @@ async def checkout(request: Request, db: Session = Depends(get_db), user: User =
     data = await request.json()
     plan = data.get("plan")
     pack = next((p for p in TOKEN_PACKS if p["id"] == plan), None)
+    if plan not in [p["id"] for p in PLANS] and not pack:
+        raise HTTPException(400, "Unknown plan")
+    if os.environ.get("STRIPE_SECRET_KEY"):
+        return _stripe_checkout(request, user, plan)
     if pack:
         # Token pack: balance grows, plan unchanged. Simulated like the plans.
         move_tokens(db, user, pack["tokens"], "token_pack")
@@ -898,6 +1017,115 @@ async def checkout(request: Request, db: Session = Depends(get_db), user: User =
     queue_email(db, user, "payment_receipt", plan_name=plan_info["name"], price=plan_info["price"],
                 date=datetime.utcnow().strftime("%B %d, %Y"), simulated=True)
     return {"ok": True, "simulated": True, "user": user_json(user)}
+
+
+# ---------- Stripe (real payments; activates when STRIPE_SECRET_KEY is set) ----------
+# item id -> (checkout mode, unit amount in cents, recurring interval or None)
+STRIPE_ITEMS = {
+    "subscription_monthly": ("subscription", 900, "month"),
+    "subscription_yearly": ("subscription", 7900, "year"),
+    "lifetime": ("payment", 24900, None),
+    "tokens_100": ("payment", 500, None),
+    "tokens_300": ("payment", 1200, None),
+}
+
+
+def _item_name(item: str) -> str:
+    p = next((x for x in PLANS if x["id"] == item), None) or next((x for x in TOKEN_PACKS if x["id"] == item), None)
+    return p["name"] if p else item
+
+
+def _stripe_checkout(request: Request, user: User, item: str):
+    import urllib.request as _u
+    mode, amount, interval = STRIPE_ITEMS[item]
+    base = _app_base(request)
+    fields = {
+        "mode": mode,
+        "success_url": base + "/?paid=1",
+        "cancel_url": base + "/?paid=0",
+        "client_reference_id": str(user.id),
+        "customer_email": user.email,
+        "metadata[user_id]": str(user.id),
+        "metadata[item]": item,
+        "line_items[0][quantity]": "1",
+        "line_items[0][price_data][currency]": "usd",
+        "line_items[0][price_data][unit_amount]": str(amount),
+        "line_items[0][price_data][product_data][name]": "Viavios — " + _item_name(item),
+    }
+    if interval:
+        fields["line_items[0][price_data][recurring][interval]"] = interval
+    api = os.environ.get("STRIPE_API_BASE", "https://api.stripe.com").rstrip("/")
+    try:
+        req = _u.Request(api + "/v1/checkout/sessions",
+                         data=urllib.parse.urlencode(fields).encode(),
+                         headers={"Authorization": "Bearer " + os.environ["STRIPE_SECRET_KEY"],
+                                  "Content-Type": "application/x-www-form-urlencoded"})
+        with _u.urlopen(req, timeout=25) as r:
+            sess = json.loads(r.read().decode())
+        return {"checkout_url": sess["url"], "stripe": True}
+    except Exception:
+        raise HTTPException(502, "Stripe could not open the checkout just now — no charge was made. Try again in a moment.")
+
+
+def _apply_purchase(db: Session, user: User, item: str, simulated: bool):
+    """Grant whatever an item buys + send the receipt. Caller commits."""
+    pack = next((p for p in TOKEN_PACKS if p["id"] == item), None)
+    if pack:
+        move_tokens(db, user, pack["tokens"], "token_pack")
+        name, price = pack["name"], pack["price"]
+    else:
+        user.plan = item
+        grant = PLAN_TOKEN_GRANTS.get(item, 0)
+        if grant:
+            move_tokens(db, user, grant, "plan_grant")
+        info = next((p for p in PLANS if p["id"] == item), {"name": item, "price": ""})
+        name, price = info["name"], info["price"]
+    db.commit()
+    queue_email(db, user, "payment_receipt", plan_name=name, price=price,
+                date=datetime.utcnow().strftime("%B %d, %Y"), simulated=simulated)
+
+
+@app.get("/api/payments/status")
+def payments_status():
+    return {"stripe": bool(os.environ.get("STRIPE_SECRET_KEY"))}
+
+
+@app.post("/api/stripe/webhook")
+async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
+    payload = await request.body()
+    secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+    if secret:
+        sig = request.headers.get("stripe-signature", "")
+        parts = dict(p.split("=", 1) for p in sig.split(",") if "=" in p)
+        # multiple v1 values possible; collect them all
+        v1s = [p.split("=", 1)[1] for p in sig.split(",") if p.startswith("v1=")]
+        try:
+            t = int(parts.get("t", "0"))
+        except Exception:
+            raise HTTPException(400, "Bad signature")
+        expected = hmac.new(secret.encode(), str(t).encode() + b"." + payload, hashlib.sha256).hexdigest()
+        if abs(int(time.time()) - t) > 300 or not any(hmac.compare_digest(expected, v) for v in v1s):
+            raise HTTPException(400, "Bad signature")
+    try:
+        evt = json.loads(payload.decode())
+    except Exception:
+        raise HTTPException(400, "Bad payload")
+    if evt.get("type") == "checkout.session.completed":
+        sess = evt.get("data", {}).get("object", {})
+        md = sess.get("metadata") or {}
+        try:
+            uid = int(md.get("user_id", "0"))
+        except Exception:
+            uid = 0
+        item = md.get("item", "")
+        user = db.query(User).filter_by(id=uid).first()
+        if user and item in STRIPE_ITEMS:
+            if db.query(StripeEvent).filter_by(event_id=evt.get("id", "")).first():
+                return {"ok": True, "duplicate": True}
+            db.add(StripeEvent(event_id=evt.get("id", "")))
+            db.commit()
+            _apply_purchase(db, user, item, simulated=False)
+    return {"ok": True}
 
 
 @app.get("/api/token-packs")

@@ -626,7 +626,8 @@ async function showPublishers(){
 }
 async function showPricing(){
   const plans = await api('/api/plans');
-  app.innerHTML = `<h1>Pricing</h1><div id="prerr"></div><p class="muted">Checkout here is simulated for the prototype — no real payment is taken. Stripe powers real payments at launch.</p>
+  let stripeOn = false; try { stripeOn = (await api('/api/payments/status')).stripe; } catch(e){}
+  app.innerHTML = `<h1>Pricing</h1><div id="prerr"></div><p class="muted">${stripeOn ? 'Payments are processed securely by Stripe.' : 'Checkout here is simulated for the prototype — no real payment is taken.'}</p>
   <div class="grid">${plans.map(p=>`<div class="card"><h3>${esc(p.name)}</h3><p class="price">${esc(p.price)}</p>
     <ul>${p.features.map(f=>`<li>${esc(f)}</li>`).join('')}</ul>
     ${me && me.id ? `<button class="primary" onclick="buyPlan('${p.id}')">${me.plan===p.id?'Current plan':'Choose '+esc(p.name)}</button>` : '<p class="muted">Sign in to choose a plan.</p>'}</div>`).join('')}</div>
@@ -637,7 +638,7 @@ async function showPricing(){
     document.getElementById('pack-grid').innerHTML = packs.map(p=>`<div class="card"><h3>${esc(p.name)}</h3><p class="price">${esc(p.price)}</p><ul>${p.features.map(f=>`<li>${esc(f)}</li>`).join('')}</ul>${me && me.id ? `<button class="primary" onclick="buyPlan('${p.id}')">Buy ${esc(p.name)}</button>` : '<p class="muted">Sign in to buy tokens.</p>'}</div>`).join('');
   } catch(e){ document.getElementById('pack-grid').innerHTML = '<p class="muted">Token packs could not load.</p>'; }
 }
-window.buyPlan = async plan => { try { const r = await api('/api/checkout',{method:'POST',body:JSON.stringify({plan})}); me.plan = r.user.plan; if (r.user.tokens !== undefined) me.tokens = r.user.tokens; renderUserbox(); showPricing(); alert(r.tokens_granted ? `Simulated checkout complete — ${r.tokens_granted} tokens added. Balance: ${r.user.tokens}` : 'Simulated checkout complete — plan is now: '+me.plan); } catch(e){ alert(e.message); } };
+window.buyPlan = async plan => { try { const r = await api('/api/checkout',{method:'POST',body:JSON.stringify({plan})}); if (r.checkout_url) { window.location.href = r.checkout_url; return; } me.plan = r.user.plan; if (r.user.tokens !== undefined) me.tokens = r.user.tokens; renderUserbox(); showPricing(); alert(r.tokens_granted ? `Simulated checkout complete — ${r.tokens_granted} tokens added. Balance: ${r.user.tokens}` : 'Simulated checkout complete — plan is now: '+me.plan); } catch(e){ alert(e.message); } };
 const EMAIL_KINDS = {welcome:'Welcome', next_steps:'Getting started', payment_receipt:'Payment receipt', account_updated:'Account update', account_cancelled:'Account closed', app_update:'Viavios news'};
 async function showAccount(){
   app.innerHTML = `<h1>Your account</h1><div id="accerr"></div>
@@ -703,4 +704,10 @@ window.showAccount = showAccount;
 window.delPasskey = async id => { if (!confirm('Remove this passkey?')) return; try { await api('/api/me/passkeys/'+id, {method:'DELETE'}); showAccount(); } catch(e){ alert(e.message); } };
 window.showMyBooks = showMyBooks; window.showDiscover = showDiscover; window.showPricing = showPricing;
 
-(async ()=>{ try { const m = await api('/api/me'); me = (m && m.id) ? m : null; } catch(e){ me=null; } renderUserbox(); route('mybooks'); })();
+(async ()=>{ try { const m = await api('/api/me'); me = (m && m.id) ? m : null; } catch(e){ me=null; } renderUserbox(); route('mybooks');
+  const paid = new URLSearchParams(location.search).get('paid');
+  if (paid !== null) { history.replaceState({}, '', location.pathname);
+    const note = document.createElement('div'); note.className = 'card'; note.style.marginTop = '14px';
+    note.innerHTML = paid === '1' ? '<strong>Thank you!</strong> Your payment went through — your plan and tokens are updated.' : '<strong>Checkout cancelled.</strong> No charge was made.';
+    app.prepend(note); }
+})();
