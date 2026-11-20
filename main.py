@@ -128,6 +128,7 @@ class Book(Base):
     release_note = Column(Text, default="")
     publisher_optin = Column(Boolean, default=False)
     font = Column(String(20), default="serif")  # serif | sans | hand | large
+    language = Column(String(8), default="en")  # writing language code (see LANGUAGES)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -188,7 +189,8 @@ def _ensure_columns():
     wanted = {
         "chapters": [("status", "VARCHAR(20) DEFAULT 'published'"),
                      ("updated_at", "TIMESTAMP")],
-        "books": [("font", "VARCHAR(20) DEFAULT 'serif'")],
+        "books": [("font", "VARCHAR(20) DEFAULT 'serif'"),
+                  ("language", "VARCHAR(8) DEFAULT 'en'")],
         "media": [("url", "VARCHAR(500)")],
         "users": [("auth_provider", "VARCHAR(20) DEFAULT 'password'"),
                   ("provider_sub", "VARCHAR(255)"),
@@ -294,6 +296,7 @@ def book_json(db: Session, b: Book, include_owner=False):
             "family_emails": b.family_emails or "", "testament_recipients": b.testament_recipients or "",
             "release_note": b.release_note or "", "publisher_optin": bool(b.publisher_optin),
             "font": getattr(b, "font", None) or "serif",
+            "language": getattr(b, "language", None) or "en",
             "votes": vote_count(db, b.id),
             "created_at": b.created_at.isoformat() if b.created_at else None}
     if include_owner:
@@ -652,6 +655,31 @@ async def apple_callback(request: Request, db: Session = Depends(get_db)):
 # TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM_NUMBER are set; until
 # then the app runs in demo mode and shows the code on screen (same pattern as
 # the email system before a sender was connected).
+# ---------- Languages ----------
+# Writing + interface languages. `speech` is the Web Speech API locale used
+# for dictation; `dir` is rtl only for Hebrew. Books store one of these codes;
+# text inside a book may freely MIX languages/scripts (nothing restricts it) —
+# the editor, reader, and PDF export all handle mixed scripts.
+LANGUAGES = [
+    {"code": "en", "name": "English", "native": "English", "dir": "ltr", "speech": "en-US"},
+    {"code": "es", "name": "Spanish", "native": "Español", "dir": "ltr", "speech": "es-ES"},
+    {"code": "pt", "name": "Portuguese", "native": "Português", "dir": "ltr", "speech": "pt-BR"},
+    {"code": "ta", "name": "Tamil", "native": "தமிழ்", "dir": "ltr", "speech": "ta-IN"},
+    {"code": "hi", "name": "Hindi", "native": "हिन्दी", "dir": "ltr", "speech": "hi-IN"},
+    {"code": "si", "name": "Sinhala", "native": "සිංහල", "dir": "ltr", "speech": "si-LK"},
+    {"code": "ru", "name": "Russian", "native": "Русский", "dir": "ltr", "speech": "ru-RU"},
+    {"code": "pl", "name": "Polish", "native": "Polski", "dir": "ltr", "speech": "pl-PL"},
+    {"code": "he", "name": "Hebrew", "native": "עברית", "dir": "rtl", "speech": "he-IL"},
+    {"code": "zh", "name": "Chinese", "native": "中文", "dir": "ltr", "speech": "zh-CN"},
+]
+LANGUAGE_CODES = {l["code"] for l in LANGUAGES}
+
+
+@app.get("/api/languages")
+def languages():
+    return LANGUAGES
+
+
 OTP_TTL_SECONDS = 600
 OTP_MAX_ATTEMPTS = 5
 
@@ -862,6 +890,9 @@ def my_books(db: Session = Depends(get_db), user: User = Depends(require_user)):
 @app.post("/api/books")
 async def create_book(request: Request, db: Session = Depends(get_db), user: User = Depends(require_user)):
     data = await request.json()
+    lang = data.get("language") or "en"
+    if lang not in LANGUAGE_CODES:
+        raise HTTPException(400, "Unknown language")
     if user.plan not in PAID_PLANS:
         count = db.query(Book).filter_by(owner_id=user.id).count()
         if count >= FREE_BOOK_LIMIT:
@@ -870,7 +901,7 @@ async def create_book(request: Request, db: Session = Depends(get_db), user: Use
     if not title:
         raise HTTPException(400, "Title is required")
     b = Book(owner_id=user.id, title=title, type=data.get("type") or "Memoir",
-             description=data.get("description") or "")
+             description=data.get("description") or "", language=lang)
     db.add(b); db.commit(); db.refresh(b)
     return book_json(db, b)
 
@@ -881,7 +912,9 @@ async def update_book(book_id: int, request: Request, db: Session = Depends(get_
     new_visibility = data.get("visibility", b.visibility)
     if new_visibility == "testament" and user.plan not in PAID_PLANS:
         raise HTTPException(402, {"error": "Testament setup is a paid-plan feature. Upgrade to use it.", "upgrade_required": True})
-    for field in ("title", "type", "description", "visibility", "family_emails", "testament_recipients", "release_note", "font"):
+    if "language" in data and data["language"] not in LANGUAGE_CODES:
+        raise HTTPException(400, "Unknown language")
+    for field in ("title", "type", "description", "visibility", "family_emails", "testament_recipients", "release_note", "font", "language"):
         if field in data:
             setattr(b, field, data[field])
     if "publisher_optin" in data:
@@ -1295,29 +1328,84 @@ def export_pdf(book_id: int, request: Request, db: Session = Depends(get_db)):
     if b.owner_id == user.id and user.plan not in PAID_PLANS:
         raise HTTPException(402, "PDF export is a paid-plan feature. Upgrade on the Pricing page.")
     from fpdf import FPDF
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=20)
+    registered = {}
+
+    def font_path(family_file):
+        """Bundled Noto fonts travel as base64 (fonts_b64/), decode once to a
+        cache dir; also accept real files in app/fonts/ or system fonts."""
+        real = BASE_DIR / "fonts" / family_file
+        if real.exists():
+            return str(real)
+        cache = Path(os.environ.get("FONTS_CACHE", "/tmp/viavios-fonts")) / family_file
+        if cache.exists():
+            return str(cache)
+        b64 = BASE_DIR / "fonts_b64" / (family_file + ".b64")
+        if b64.exists():
+            try:
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                cache.write_bytes(base64.b64decode(b64.read_text()))
+                return str(cache)
+            except Exception:
+                return None
+        sys_path = Path("/usr/share/fonts/truetype/noto") / family_file
+        return str(sys_path) if sys_path.exists() else None
+
+    SCRIPT_FONTS = [("tamil", "NotoSansTamil-Regular.ttf", (0x0B80, 0x0BFF)),
+                    ("devanagari", "NotoSansDevanagari-Regular.ttf", (0x0900, 0x097F)),
+                    ("sinhala", "NotoSansSinhala-Regular.ttf", (0x0D80, 0x0DFF)),
+                    ("hebrew", "NotoSansHebrew-Regular.ttf", (0x0590, 0x05FF))]
+    FONT_FILES = {fam: f for fam, f, _r in SCRIPT_FONTS}
+    FONT_FILES["noto"] = "NotoSans-Regular.ttf"
+
+    def pick_family(text):
+        """Dominant non-Latin script wins; every bundled Noto also carries
+        Latin, so mixed-language text (English + Tamil, say) renders whole."""
+        counts = {}
+        for fam, _f, (lo, hi) in SCRIPT_FONTS:
+            counts[fam] = sum(1 for ch in text if lo <= ord(ch) <= hi)
+        best = max(counts, key=counts.get) if counts else "noto"
+        return best if counts.get(best, 0) > 0 else "noto"
+
     def clean(s):
         return (s or "").encode("latin-1", "replace").decode("latin-1")
-    def txt(pdf, size, style, h, s):
+
+    def txt(size, style, h, s):
+        s = s or ""
+        fam = pick_family(s)
+        path = font_path(FONT_FILES[fam])
+        if path:
+            if fam not in registered:
+                try:
+                    pdf.add_font(fam, "", path)
+                    registered[fam] = True
+                except Exception:
+                    registered[fam] = False
+            if registered.get(fam):
+                pdf.set_font(fam, "", size)
+                pdf.set_x(pdf.l_margin)
+                pdf.multi_cell(0, h, s, new_x="LMARGIN", new_y="NEXT")
+                return
         pdf.set_font("helvetica", style, size)
         pdf.set_x(pdf.l_margin)
         pdf.multi_cell(0, h, clean(s), new_x="LMARGIN", new_y="NEXT")
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=20)
+
     pdf.add_page()
-    txt(pdf, 24, "B", 12, b.title)
-    txt(pdf, 12, "", 7, f"{b.type} - Viavios")
+    txt(24, "B", 12, b.title)
+    txt(12, "", 7, f"{b.type} - Viavios")
     if b.description:
-        pdf.ln(4); txt(pdf, 12, "", 7, b.description)
+        pdf.ln(4); txt(12, "", 7, b.description)
     chapters = db.query(Chapter).filter_by(book_id=b.id).order_by(Chapter.sort_order, Chapter.id).all()
     for c in chapters:
         pdf.add_page()
-        txt(pdf, 18, "B", 10, c.title)
-        txt(pdf, 12, "", 7, c.body or "")
+        txt(18, "B", 10, c.title)
+        txt(12, "", 7, c.body or "")
     timeline = db.query(TimelineEntry).filter_by(book_id=b.id).all()
     if timeline:
-        pdf.add_page(); txt(pdf, 18, "B", 10, "Chronicle / Timeline")
+        pdf.add_page(); txt(18, "B", 10, "Chronicle / Timeline")
         for t in timeline:
-            txt(pdf, 12, "", 7, f"{t.date_text}: {t.event_text}")
+            txt(12, "", 7, f"{t.date_text}: {t.event_text}")
     out = bytes(pdf.output())
     return Response(content=out, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="remora-book-{b.id}.pdf"'})

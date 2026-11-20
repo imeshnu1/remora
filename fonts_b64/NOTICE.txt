@@ -1,0 +1,5 @@
+The Noto Sans font files in this folder (stored as base64 text for the
+text-only deploy pipeline, decoded at runtime by main.py) are the
+Google Noto fonts, licensed under the SIL Open Font License 1.1.
+They are bundled so PDF exports can render Spanish, Portuguese, Russian,
+Polish, Hebrew, Tamil, Hindi, and Sinhala text.

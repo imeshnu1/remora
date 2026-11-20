@@ -10,14 +10,34 @@ async function api(path, opts={}) {
   }
   return data;
 }
+let uiLang = localStorage.getItem('viavios_lang') || 'en';
+const t = k => (window.VV_I18N && VV_I18N[uiLang] && VV_I18N[uiLang][k]) || (window.VV_I18N && VV_I18N.en[k]) || k;
+const langMeta = code => (window.VV_LANGS || []).find(l => l.code === code) || {code:'en', native:'English', dir:'ltr', speech:'en-US'};
+function applyUiLang(){
+  document.documentElement.lang = uiLang;
+  document.documentElement.dir = langMeta(uiLang).dir;
+  const labels = {mybooks:'nav_books', discover:'nav_discover', publishers:'nav_publishers', pricing:'nav_pricing', account:'nav_account'};
+  document.querySelectorAll('[data-nav]').forEach(b => { if (labels[b.dataset.nav]) b.textContent = t(labels[b.dataset.nav]); });
+  const f = document.querySelector('footer');
+  if (f) f.innerHTML = `${esc(t('footer_line'))} · <a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms of Use</a>`;
+  const sel = document.getElementById('lang-switch'); if (sel) sel.value = uiLang;
+  renderUserbox();
+}
 function renderUserbox(){
   document.getElementById('userbox').innerHTML = me && me.id
-    ? `<span class="badge">${esc(me.name)} · ${esc(me.plan)}</span> <button id="signout">Sign out</button>`
-    : `<button id="signin-nav">Sign in</button>`;
+    ? `<span class="badge">${esc(me.name)} · ${esc(me.plan)}</span> <button id="signout">${t('sign_out')}</button>`
+    : `<button id="signin-nav">${t('sign_in')}</button>`;
   const so = document.getElementById('signout'); if (so) so.onclick = async ()=>{ await fetch('/api/signout',{method:'POST'}); me=null; renderUserbox(); showAuth(); };
   const si = document.getElementById('signin-nav'); if (si) si.onclick = ()=>{ showAuth(); openAuthModal('signin'); };
 }
 document.querySelectorAll('[data-nav]').forEach(b => b.onclick = ()=> route(b.dataset.nav));
+{ const sel = document.getElementById('lang-switch');
+  if (sel) { sel.innerHTML = (window.VV_LANGS||[]).map(l=>`<option value="${l.code}">${esc(l.native)}</option>`).join('');
+    sel.value = uiLang;
+    sel.onchange = ()=>{ uiLang = sel.value; localStorage.setItem('viavios_lang', uiLang); applyUiLang(); if (!me || !me.id) showAuth(); };
+  }
+  applyUiLang();
+}
 function route(name){
   if (name==='discover') return showDiscover();
   if (name==='publishers') return showPublishers();
@@ -27,26 +47,28 @@ function route(name){
 }
 function showAuth(){
   app.innerHTML = `<figure class="hero"><img class="hero-img" src="/static/img/hero-family.jpg" alt="Three generations of one family laughing together around the kitchen table">
-  <figcaption class="hero-caption"><h1>Write the book of your life.</h1></figcaption></figure>
-  <p>Viavios is where anybody can make their own memoir, legacy book, chronicle, testament, or photo story — in your own words, your own pictures, or your own voice.</p>
+  <figcaption class="hero-caption"><h1>${t('hero_title')}</h1></figcaption></figure>
+  <p>${t('hero_sub')}</p>
   <div class="hero-cta">
-    <button class="primary big" id="cta-hero-signup">Create your free account</button>
-    <button class="big" id="cta-hero-signin">Sign in</button>
-    <p class="muted">Free to start — your first book is on us. Sign up with Google, a passkey, or your email.</p>
+    <button class="primary big" id="cta-hero-signup">${t('hero_cta')}</button>
+    <button class="big" id="cta-hero-signin">${t('sign_in')}</button>
+    <p class="muted">${t('hero_free')}</p>
   </div>
-  <h2 style="margin-top:30px">Stories people are writing</h2>
+  <h2 style="margin-top:30px">${t('stories_heading')}</h2>
   <div id="landing-stories"><p class="muted">Loading stories…</p></div>
-  <div class="paths"><h2>You don't have to be a writer</h2>
-  <p>There are three ways to tell your story on Viavios. Pick the one that feels easy.</p>
+  <div class="paths"><h2>${t('paths_heading')}</h2>
+  <p>${t('paths_sub')}</p>
   <div class="grid">
-    <div class="card"><h3>Write it</h3><p>Chapter by chapter, in your own words — a little at a time is fine.</p></div>
-    <div class="card"><h3>Photograph it</h3><p>Build a Photo Story from your pictures — your family, your childhood, the things you have collected and kept. A few words under each photo is enough.</p></div>
-    <div class="card"><h3>Say it</h3><p>Record your voice telling it, in the language you speak at home. Your voice becomes your book.</p></div>
+    <div class="card"><h3>${t('path_write_t')}</h3><p>${t('path_write_d')}</p></div>
+    <div class="card"><h3>${t('path_photo_t')}</h3><p>${t('path_photo_d')}</p></div>
+    <div class="card"><h3>${t('path_say_t')}</h3><p>${t('path_say_d')}</p></div>
+    <div class="card"><h3>${t('path_film_t')}</h3><p>${t('path_film_d')}</p></div>
+    <div class="card"><h3>${t('path_movie_t')} <span class="soon">${t('coming_soon')}</span></h3><p>${t('path_movie_d')}</p></div>
   </div>
-  <p class="magazine-line">However you tell it, your story becomes your own magazine of your life — a real book your family keeps.</p>
-  <div class="landing-cta"><button class="primary" id="cta-paths">Begin your story — create your free account</button></div></div>
-  <div class="landing-cta"><p><strong>Your life is a story too — start writing yours.</strong></p>
-  <button class="primary" id="cta-write">Start writing — create your free account</button></div>`;
+  <p class="magazine-line">${t('magazine_line')}</p>
+  <div class="landing-cta"><button class="primary" id="cta-paths">${t('begin_cta')}</button></div></div>
+  <div class="landing-cta"><p><strong>${t('final_line')}</strong></p>
+  <button class="primary" id="cta-write">${t('start_cta')}</button></div>`;
   document.getElementById('cta-hero-signup').onclick = ()=> openAuthModal('signup');
   document.getElementById('cta-hero-signin').onclick = ()=> openAuthModal('signin');
   document.getElementById('cta-write').onclick = ()=> openAuthModal('signup');
@@ -65,8 +87,8 @@ async function openAuthModal(tab='signup'){
   overlay.id = 'auth-modal'; overlay.className = 'modal-overlay';
   overlay.innerHTML = `<div class="modal card">
     <button class="modal-x" id="am-x" aria-label="Close">×</button>
-    <h2 id="am-title">${tab==='signup' ? 'Create your account' : 'Welcome back'}</h2>
-    <div class="tabs"><button id="am-tab-su" class="${tab==='signup'?'tab-on':''}">Create account</button><button id="am-tab-si" class="${tab==='signin'?'tab-on':''}">Sign in</button></div>
+    <h2 id="am-title">${tab==='signup' ? t('modal_create') : t('modal_welcome')}</h2>
+    <div class="tabs"><button id="am-tab-su" class="${tab==='signup'?'tab-on':''}">${t('tab_create')}</button><button id="am-tab-si" class="${tab==='signin'?'tab-on':''}">${t('tab_signin')}</button></div>
     <div id="am-err"></div>
     <div id="am-su" ${tab!=='signup'?'hidden':''}>
       <label>Your name<input id="am-su-name"></label>
@@ -109,7 +131,7 @@ async function openAuthModal(tab='signup'){
     document.getElementById('am-si').hidden = t !== 'signin';
     document.getElementById('am-tab-su').className = t === 'signup' ? 'tab-on' : '';
     document.getElementById('am-tab-si').className = t === 'signin' ? 'tab-on' : '';
-    document.getElementById('am-title').textContent = t === 'signup' ? 'Create your account' : 'Welcome back';
+    document.getElementById('am-title').textContent = t === 'signup' ? t('modal_create') : t('modal_welcome');
   };
   document.getElementById('am-tab-su').onclick = ()=> setTab('signup');
   document.getElementById('am-tab-si').onclick = ()=> setTab('signin');
@@ -352,10 +374,12 @@ async function showMyBooks(){
       <label>Title<input id="nb-title"></label>
       <label>Type<select id="nb-type"><option>Memoir</option><option>Legacy Book</option><option>Chronicle</option><option>Testament</option><option>Photo Story</option><option>Journal</option><option>Diary</option></select></label>
       <label>About this book<textarea id="nb-desc" style="min-height:70px"></textarea></label>
+      <label>${t('book_language')}<select id="nb-lang">${(window.VV_LANGS||[]).map(l=>`<option value="${l.code}" ${l.code===uiLang?'selected':''}>${esc(l.native)}</option>`).join('')}</select></label>
+      <p class="muted">${t('mixed_note')}</p>
       <button class="primary" id="nb-btn">Create book</button>
       <p class="muted">Free plan: 1 book. Paid plans: unlimited books, PDF export, testament setup.</p></div>
     ${books.map(b=>`<div class="card"><h3>${esc(b.title)}</h3>
-      <span class="badge">${esc(b.type)}</span><span class="badge">${esc(b.visibility)}</span><span class="badge">♥ ${b.votes} votes</span>
+      <span class="badge">${esc(b.type)}</span><span class="badge">${esc(b.visibility)}</span><span class="badge">${esc(langMeta(b.language).native)}</span><span class="badge">♥ ${b.votes} votes</span>
       ${b.publisher_optin?'<span class="badge">Open to publishers</span>':''}
       <p>${esc(b.description)}</p>
       <button class="ghost" onclick="openEditor(${b.id})">Write / Edit</button>
@@ -363,7 +387,7 @@ async function showMyBooks(){
       <button class="ghost" onclick="downloadPdf(${b.id},this)">PDF export</button>
       <button class="ghost danger" onclick="deleteBook(${b.id})">Delete</button></div>`).join('') || '<p class="muted">No books yet.</p>'}`;
   document.getElementById('nb-btn').onclick = async ()=>{
-    try { await api('/api/books',{method:'POST',body:JSON.stringify({title:val('nb-title'),type:val('nb-type'),description:val('nb-desc')})}); showMyBooks(); }
+    try { await api('/api/books',{method:'POST',body:JSON.stringify({title:val('nb-title'),type:val('nb-type'),description:val('nb-desc'),language:val('nb-lang')})}); showMyBooks(); }
     catch(e){ errBox('bookerr', e.message + (e.status===402 ? ' — see Pricing to upgrade.' : '')); }
   };
 }
@@ -387,6 +411,7 @@ function renderChapterBody(body, media){
 
 async function openEditor(id){
   const b = await api(`/api/books/${id}`);
+  window._bookLang = b.language || 'en'; window._bookDir = langMeta(b.language).dir; window._bookSpeech = langMeta(b.language).speech;
   const fontCls = FONT_CLASSES[b.font] || 'font-serif';
   chapStatus = {}; (b.chapters || []).forEach(c => chapStatus[c.id] = c.status || 'published');
   const isJournal = (b.type === 'Journal' || b.type === 'Diary');
@@ -394,6 +419,7 @@ async function openEditor(id){
   <h1>${esc(b.title)}</h1><div id="ederr"></div>
   <div class="card"><h2>Book settings &amp; sharing</h2>
     <label>Title<input id="bs-title" value="${esc(b.title)}"></label>
+    <label>${t('book_language')}<select id="bs-lang">${(window.VV_LANGS||[]).map(l=>`<option value="${l.code}" ${b.language===l.code?'selected':''}>${esc(l.native)}</option>`).join('')}</select></label>
     <label>Book font<select id="bs-font">
       ${[['serif','Serif — the classic book look'],['sans','Sans — clean and modern'],['hand','Handwriting — personal, like a letter'],['large','Large print — extra big and easy to read']].map(([v,l])=>`<option value="${v}" ${b.font===v?'selected':''}>${l}</option>`).join('')}</select></label>
     <label>Sharing<select id="bs-vis">
@@ -409,7 +435,7 @@ async function openEditor(id){
     ${b.chapters.map(c=>`<div class="card chapter-card"><label>Chapter title<input id="ct-${c.id}" value="${esc(c.title)}"></label>
       <label>Visibility<select id="cv-${c.id}">${['inherit','private','family','public','testament'].map(v=>`<option ${c.visibility===v?'selected':''}>${v}</option>`).join('')}</select></label>
       <span class="badge ${c.status==='draft'?'draft-badge':''}" id="cs-${c.id}">${c.status==='draft'?'Draft':'Published'}</span> <span class="muted saved-note" id="sv-${c.id}"></span>
-      <textarea id="cb-${c.id}" class="${fontCls}" spellcheck="true" autocorrect="on" autocapitalize="sentences">${esc(c.body)}</textarea>
+      <textarea id="cb-${c.id}" class="${fontCls}" lang="${b.language||'en'}" dir="${langMeta(b.language).dir}" spellcheck="true" autocorrect="on" autocapitalize="sentences">${esc(c.body)}</textarea>
       <div class="toolrow">
         <button class="ghost" onclick="toggleDictate(${c.id}, this)">🎙 Dictate</button>
         <button class="ghost" onclick="runGrammar(${c.id})">✓ Check grammar</button>
@@ -422,7 +448,7 @@ async function openEditor(id){
       <button class="ghost" onclick="togglePublish(${c.id}, ${id})">${c.status==='draft'?'Publish chapter':'Move back to draft'}</button>
       <button class="ghost danger" onclick="deleteChapter(${c.id},${id})">Delete chapter</button></div>`).join('')}
     <label>New chapter title<input id="nc-title"></label>
-    <textarea id="nc-body" class="${fontCls}" spellcheck="true" autocorrect="on" autocapitalize="sentences" placeholder="Write freely — or dictate, scan a page, or import below. This box keeps its own draft on this device."></textarea>
+    <textarea id="nc-body" class="${fontCls}" lang="${b.language||'en'}" dir="${langMeta(b.language).dir}" spellcheck="true" autocorrect="on" autocapitalize="sentences" placeholder="Write freely — or dictate, scan a page, or import below. This box keeps its own draft on this device."></textarea>
     <div class="toolrow">
       <button class="ghost" onclick="toggleDictate('nc', this)">🎙 Dictate</button>
       <button class="ghost" onclick="runGrammar('nc')">✓ Check grammar</button>
@@ -464,7 +490,7 @@ async function openEditor(id){
     <button class="ghost" id="lt-btn">Add letter</button></div>
   <p><button class="ghost" onclick="openReader(${id})">Read this book →</button> <a href="/api/books/${id}/pdf">Download PDF (paid plans)</a></p>`;
   document.getElementById('bs-save').onclick = async ()=>{
-    try { await api(`/api/books/${id}`,{method:'PUT',body:JSON.stringify({title:val('bs-title'),visibility:val('bs-vis'),font:val('bs-font'),family_emails:val('bs-family'),testament_recipients:val('bs-test'),release_note:val('bs-note'),publisher_optin:document.getElementById('bs-pub').checked})}); openEditor(id); }
+    try { await api(`/api/books/${id}`,{method:'PUT',body:JSON.stringify({title:val('bs-title'),visibility:val('bs-vis'),font:val('bs-font'),language:val('bs-lang'),family_emails:val('bs-family'),testament_recipients:val('bs-test'),release_note:val('bs-note'),publisher_optin:document.getElementById('bs-pub').checked})}); openEditor(id); }
     catch(e){ errBox('ederr', e.message + (e.status===402 ? ' — see Pricing to upgrade.' : '')); }
   };
   const todayBtn = document.getElementById('today-btn');
@@ -533,7 +559,7 @@ window.toggleDictate = (cid, btn) => {
   if (!ta) return;
   if (!SR) { alert('Dictation needs the Chrome browser (or your phone keyboard\u2019s microphone button — that works everywhere).'); return; }
   if (_recog) { _recog.stop(); return; }
-  const r = new SR(); r.continuous = true; r.interimResults = true; r.lang = 'en-US';
+  const r = new SR(); r.continuous = true; r.interimResults = true; r.lang = window._bookSpeech || 'en-US';
   let base = ta.value ? ta.value.replace(/\s+$/,'') + ' ' : ''; let finals = '';
   r.onresult = e => { let interim = ''; for (let i = e.resultIndex; i < e.results.length; i++) { const t = e.results[i][0].transcript; if (e.results[i].isFinal) finals += t + ' '; else interim += t; } ta.value = base + finals + interim; ta.dispatchEvent(new Event('input')); };
   r.onend = () => { _recog = null; if (_recogBtn) _recogBtn.textContent = '🎙 Dictate'; };
@@ -550,7 +576,8 @@ window.runGrammar = async cid => {
   try {
     // The check runs from the writer's own browser to LanguageTool: their
     // free API refuses datacenter servers, home browsers are welcome.
-    const form = new URLSearchParams({text: ta.value.slice(0, 20000), language: 'en-US'});
+    const LT = {'en':'en-US','es':'es','pt':'pt','ru':'ru','pl':'pl','zh':'zh','hi':'hi'};
+    const form = new URLSearchParams({text: ta.value.slice(0, 20000), language: LT[window._bookLang || 'en'] || 'auto'});
     const resp = await fetch('https://api.languagetool.org/v2/check', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: form});
     if (!resp.ok) throw new Error('The grammar checker is busy right now — your writing is saved; try again in a moment.');
     const raw = await resp.json();
@@ -644,7 +671,7 @@ window.openReader = async id => {
     <h1>${esc(b.title)}</h1><p class="muted">by ${esc(b.author_name||'you')} · ${esc(b.type)} · ♥ ${b.votes} votes ${b.publisher_optin?'· Open to publishers':''}</p>
     <p>${esc(b.description)}</p>
     <button class="primary" id="vote-btn" ${b.my_vote?'disabled':''}>${b.my_vote?'You voted ♥':'Vote for this story'}</button>
-    ${b.chapters.map(c=>`<div class="card"><h2>${esc(c.title)}</h2><div class="prose ${fontCls}">${renderChapterBody(c.body, b.media)}</div></div>`).join('')}
+    ${b.chapters.map(c=>`<div class="card"><h2 lang="${b.language||'en'}" dir="${langMeta(b.language).dir}">${esc(c.title)}</h2><div class="prose ${fontCls}" lang="${b.language||'en'}" dir="${langMeta(b.language).dir}">${renderChapterBody(c.body, b.media)}</div></div>`).join('')}
     ${special.length?`<div class="card"><h2>Special messages</h2>${special.map(m=>mediaLine(m)).join('')}</div>`:''}
     ${b.timeline.length?`<div class="card"><h2>Chronicle</h2>${b.timeline.map(t=>`<p><strong>${esc(t.date_text)}</strong> — ${esc(t.event_text)}</p>`).join('')}</div>`:''}
     ${b.media.filter(m=>m.kind==='photo' && !m.chapter_id).map(m=>`<img class="media" src="${m.url}">`).join('')}`;

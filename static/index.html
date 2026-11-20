@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Viavios — Write the book of your life</title>
 <link rel="stylesheet" href="/static/style.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;700&family=Noto+Sans+Tamil:wght@400;700&family=Noto+Sans+Devanagari:wght@400;700&family=Noto+Sans+Sinhala:wght@400;700&family=Noto+Sans+Hebrew:wght@400;700&family=Noto+Sans+SC:wght@400;700&display=swap" rel="stylesheet">
 </head>
 <body>
 <header>
@@ -15,12 +17,14 @@
     <button data-nav="publishers">For Publishers</button>
     <button data-nav="pricing">Pricing</button>
     <button data-nav="account">Account</button>
+    <select id="lang-switch" aria-label="Language"></select>
     <span id="userbox"></span>
   </nav>
 </header>
 <main id="app"><p class="muted">Loading…</p></main>
 <footer class="muted">Viavios — the way of life. Your memoir, legacy book, chronicle, or testament, in your own words. · <a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms of Use</a></footer>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="/static/i18n.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>
