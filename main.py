@@ -59,6 +59,7 @@ class User(Base):
     terms_accepted_at = Column(DateTime)
     phone = Column(String(30))
     phone_verified = Column(Boolean, default=False)
+    adopter_number = Column(Integer, nullable=True)  # Founding 503 early-adopter number, if any
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class StripeEvent(Base):
@@ -198,7 +199,8 @@ def _ensure_columns():
                   ("terms_version", "VARCHAR(40)"),
                   ("terms_accepted_at", "TIMESTAMP"),
                   ("phone", "VARCHAR(30)"),
-                  ("phone_verified", "BOOLEAN DEFAULT FALSE")],
+                  ("phone_verified", "BOOLEAN DEFAULT FALSE"),
+                  ("adopter_number", "INTEGER")],
     }
     from sqlalchemy import inspect as sa_inspect, text as sa_text
     insp = sa_inspect(engine)
@@ -214,6 +216,47 @@ def _ensure_columns():
 
 
 _ensure_columns()
+
+# ---------- Founding 503 early adopters ----------
+# The first EARLY_ADOPTER_LIMIT profiles ever created are Early Adopters:
+# numbered, badged, and their first EARLY_FREE_CHAPTERS chapters are free.
+# (Pricing instruction from Imesh, 2026-11-20; the rest of his tiers will
+# attach to these counters when he supplies them.)
+EARLY_ADOPTER_LIMIT = int(os.environ.get("EARLY_ADOPTER_LIMIT", "503"))
+EARLY_FREE_CHAPTERS = 5
+
+
+def _assign_adopter(db: Session, u: User):
+    """Give a brand-new user the next Founding number if spots remain.
+    Caller commits."""
+    if getattr(u, "adopter_number", None) is not None:
+        return
+    claimed = db.query(User).filter(User.adopter_number.isnot(None)).count()
+    if claimed < EARLY_ADOPTER_LIMIT:
+        u.adopter_number = claimed + 1
+
+
+def _backfill_adopters():
+    """Existing accounts are the earliest adopters by definition: number
+    them in signup order at startup (runs once; idempotent)."""
+    db = SessionLocal()
+    try:
+        claimed = db.query(User).filter(User.adopter_number.isnot(None)).count()
+        if claimed >= EARLY_ADOPTER_LIMIT:
+            return
+        nxt = (db.query(sa_func.max(User.adopter_number)).scalar() or 0) + 1
+        for u in db.query(User).filter(User.adopter_number.is_(None)).order_by(User.id).all():
+            if nxt > EARLY_ADOPTER_LIMIT:
+                break
+            u.adopter_number = nxt
+            nxt += 1
+        db.commit()
+    finally:
+        db.close()
+
+
+from sqlalchemy import func as sa_func
+_backfill_adopters()
 
 # ---------- Helpers ----------
 def get_db():
@@ -251,15 +294,24 @@ def require_user(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(401, "Sign in required")
     return u
 
-def user_json(u: User):
-    return {"id": u.id, "name": u.name,
+def user_json(u: User, db: Session = None):
+    data = {"id": u.id, "name": u.name,
             "email": None if (u.email or "").endswith("@phone.viavios.local") else u.email,
             "plan": u.plan, "is_paid": u.plan in PAID_PLANS,
             "tokens": u.token_balance if u.token_balance is not None else WELCOME_TOKENS,
             "terms_accepted": bool(getattr(u, "terms_accepted_at", None)),
             "terms_version": getattr(u, "terms_version", None),
             "phone": getattr(u, "phone", None),
-            "phone_verified": bool(getattr(u, "phone_verified", False))}
+            "phone_verified": bool(getattr(u, "phone_verified", False)),
+            "early_adopter": getattr(u, "adopter_number", None) is not None,
+            "adopter_number": getattr(u, "adopter_number", None)}
+    if db is not None:
+        written = (db.query(Chapter).join(Book, Chapter.book_id == Book.id)
+                   .filter(Book.owner_id == u.id).count())
+        data["chapters_written"] = written
+        data["free_chapters_left"] = (max(0, EARLY_FREE_CHAPTERS - written)
+                                      if data["early_adopter"] else 0)
+    return data
 
 
 def move_tokens(db: Session, user: User, delta: int, reason: str):
@@ -337,7 +389,7 @@ async def signup(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(400, "An account with that email already exists")
     u = User(name=name, email=email, password_hash=hash_password(password), plan="free",
              terms_version=TERMS_VERSION, terms_accepted_at=datetime.utcnow())
-    db.add(u); db.commit(); db.refresh(u)
+    db.add(u); _assign_adopter(db, u); db.commit(); db.refresh(u)
     db.add(TokenLedger(user_id=u.id, delta=WELCOME_TOKENS, reason="welcome")); db.commit()
     queue_email(db, u, "welcome")
     queue_email(db, u, "next_steps")
@@ -375,7 +427,7 @@ def signout(request: Request, db: Session = Depends(get_db)):
 @app.get("/api/me")
 def me(request: Request, db: Session = Depends(get_db)):
     u = current_user(request, db)
-    return user_json(u) if u else JSONResponse({"user": None}, status_code=200) if False else (user_json(u) if u else {"id": None})
+    return user_json(u, db) if u else {"id": None}
 
 @app.get("/api/me/emails")
 def my_emails(db: Session = Depends(get_db), user: User = Depends(require_user)):
@@ -521,7 +573,7 @@ def google_callback(request: Request, code: str = "", state: str = "", db: Sessi
     if not u:
         u = User(name=info.get("name") or email.split("@")[0], email=email, password_hash=None,
                  auth_provider="google", provider_sub=info.get("sub"), plan="free")
-        db.add(u); db.commit(); db.refresh(u)
+        db.add(u); _assign_adopter(db, u); db.commit(); db.refresh(u)
         db.add(TokenLedger(user_id=u.id, delta=WELCOME_TOKENS, reason="welcome")); db.commit()
         queue_email(db, u, "welcome")
         queue_email(db, u, "next_steps")
@@ -638,7 +690,7 @@ async def apple_callback(request: Request, db: Session = Depends(get_db)):
             return RedirectResponse("/?auth_error=apple", status_code=302)
         u = User(name=name, email=email, password_hash=None,
                  auth_provider="apple", provider_sub=sub, plan="free")
-        db.add(u); db.commit(); db.refresh(u)
+        db.add(u); _assign_adopter(db, u); db.commit(); db.refresh(u)
         db.add(TokenLedger(user_id=u.id, delta=WELCOME_TOKENS, reason="welcome")); db.commit()
         queue_email(db, u, "welcome")
         queue_email(db, u, "next_steps")
@@ -678,6 +730,14 @@ LANGUAGE_CODES = {l["code"] for l in LANGUAGES}
 @app.get("/api/languages")
 def languages():
     return LANGUAGES
+
+
+@app.get("/api/early-adopters")
+def early_adopters(db: Session = Depends(get_db)):
+    claimed = db.query(User).filter(User.adopter_number.isnot(None)).count()
+    return {"limit": EARLY_ADOPTER_LIMIT, "claimed": claimed,
+            "remaining": max(0, EARLY_ADOPTER_LIMIT - claimed),
+            "free_chapters": EARLY_FREE_CHAPTERS}
 
 
 OTP_TTL_SECONDS = 600
@@ -790,7 +850,7 @@ async def phone_complete(request: Request, db: Session = Depends(get_db)):
     u = User(name=name, email=f"{phone.replace('+', '')}@phone.viavios.local", password_hash=None,
              auth_provider="phone", plan="free", phone=phone, phone_verified=True,
              terms_version=TERMS_VERSION, terms_accepted_at=datetime.utcnow())
-    db.add(u); db.commit(); db.refresh(u)
+    db.add(u); _assign_adopter(db, u); db.commit(); db.refresh(u)
     db.add(TokenLedger(user_id=u.id, delta=WELCOME_TOKENS, reason="welcome")); db.commit()
     queue_email(db, u, "welcome")
     queue_email(db, u, "next_steps")

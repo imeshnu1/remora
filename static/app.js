@@ -12,6 +12,7 @@ async function api(path, opts={}) {
 }
 let uiLang = localStorage.getItem('viavios_lang') || 'en';
 const t = k => (window.VV_I18N && VV_I18N[uiLang] && VV_I18N[uiLang][k]) || (window.VV_I18N && VV_I18N.en[k]) || k;
+const te = k => (window.VV_EA && VV_EA[uiLang] && VV_EA[uiLang][k]) || (window.VV_EA && VV_EA.en[k]) || k;
 const langMeta = code => (window.VV_LANGS || []).find(l => l.code === code) || {code:'en', native:'English', dir:'ltr', speech:'en-US'};
 function applyUiLang(){
   document.documentElement.lang = uiLang;
@@ -54,6 +55,7 @@ function showAuth(){
     <button class="big" id="cta-hero-signin">${t('sign_in')}</button>
     <p class="muted">${t('hero_free')}</p>
   </div>
+  <div class="card ea-banner"><h3>🌟 ${te('ea_title')}</h3><p>${te('ea_sub')}</p><p><strong id="ea-spots"></strong></p></div>
   <h2 style="margin-top:30px">${t('stories_heading')}</h2>
   <div id="landing-stories"><p class="muted">Loading stories…</p></div>
   <div class="paths"><h2>${t('paths_heading')}</h2>
@@ -74,6 +76,7 @@ function showAuth(){
   document.getElementById('cta-write').onclick = ()=> openAuthModal('signup');
   document.getElementById('cta-paths').onclick = ()=> openAuthModal('signup');
   loadLandingStories();
+  fetch('/api/early-adopters').then(r => r.json()).then(d => { const el = document.getElementById('ea-spots'); if (el) el.textContent = d.remaining + ' ' + te('ea_spots') + ' · ' + d.claimed + ' / ' + d.limit; }).catch(()=>{});
 }
 // ---------- Auth popup (modal): email, Google, Apple, passkeys ----------
 const b64uToBuf = s => { s = String(s).replace(/-/g,'+').replace(/_/g,'/'); while (s.length % 4) s += '='; const bin = atob(s); const buf = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i); return buf.buffer; };
@@ -370,6 +373,7 @@ function errBox(id,msg){ document.getElementById(id).innerHTML = `<p class="erro
 async function showMyBooks(){
   const books = await api('/api/books');
   app.innerHTML = `<h1>My Books</h1><div id="bookerr"></div>
+    ${me.early_adopter ? `<div class="card ea-banner"><strong>🌟 Early Adopter #${me.adopter_number} of 503</strong> — your first five chapters are free.${me.free_chapters_left != null ? `<br>Free chapters left: <strong>${me.free_chapters_left}</strong> of 5` : ''}</div>` : ''}
     <div class="card"><h2>Start a new book</h2>
       <label>Title<input id="nb-title"></label>
       <label>Type<select id="nb-type"><option>Memoir</option><option>Legacy Book</option><option>Chronicle</option><option>Testament</option><option>Photo Story</option><option>Journal</option><option>Diary</option></select></label>
@@ -713,6 +717,7 @@ window.buyPlan = async plan => { try { const r = await api('/api/checkout',{meth
 const EMAIL_KINDS = {welcome:'Welcome', next_steps:'Getting started', payment_receipt:'Payment receipt', account_updated:'Account update', account_cancelled:'Account closed', app_update:'Viavios news'};
 async function showAccount(){
   app.innerHTML = `<h1>Your account</h1><div id="accerr"></div>
+  ${me.early_adopter ? `<div class="card ea-banner"><strong>🌟 Early Adopter #${me.adopter_number} of 503</strong> — one of the Founding 503. Your first five chapters are free.${me.free_chapters_left != null ? ` Free chapters left: <strong>${me.free_chapters_left}</strong> of 5.` : ''}</div>` : ''}
   <div class="grid">
     <div class="card"><h3>Profile</h3>
       <label>Your name<input id="ac-name" value="${esc(me.name)}"></label>

@@ -90,3 +90,5 @@ button.wide,.primary.wide{width:100%}
 #lang-switch{font:inherit;font-size:14.5px;padding:4px 6px;border-radius:8px;border:1px solid #A87F2D;background:#FFFDF8;color:#2B2118;max-width:130px}
 body{font-family:'Noto Sans','Noto Sans Tamil','Noto Sans Devanagari','Noto Sans Sinhala','Noto Sans Hebrew','Noto Sans SC',Georgia,serif}
 textarea[dir="rtl"],.prose[dir="rtl"]{text-align:right}
+.ea-banner{border:2px solid #A87F2D;background:#FFFDF8}
+.ea-banner h3{margin-top:0;color:#6E2434}
